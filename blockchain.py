@@ -1,4 +1,5 @@
 import json
+import pickle
 import time
 from enum import IntEnum, StrEnum
 from hashlib import sha256
@@ -158,5 +159,10 @@ class Blockchain:
         blk.hash = self.proof_of_work(blk)
         self.chain.append(blk)
 
+    def snapshot(self, p):
+        with open(p, 'wb') as fh:
+            pickle.dump(self, fh, pickle.HIGHEST_PROTOCOL)
+
     def __str__(self):
-        return json.dumps([b.to_dict() for b in self.chain], sort_keys=True, indent=4)
+        return "\n".join([json.dumps(b.to_dict(), sort_keys=True) for b in self.chain])
+        # return json.dumps([b.to_dict() for b in self.chain], sort_keys=True, indent=4)
