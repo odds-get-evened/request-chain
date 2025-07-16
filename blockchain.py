@@ -92,9 +92,11 @@ class Blockchain:
         self.genesis()
 
     def genesis(self):
-        b = Block(0, BIT_OP * 64, [], nonce=0)
-        b.hash = b.compute_hash()
-        self.chain.append(b)
+        # only create this block if chain is empty
+        if len(self.chain) <= 0:
+            b = Block(0, BIT_OP * 64, [], nonce=0)
+            b.hash = b.compute_hash()
+            self.chain.append(b)
 
     @property
     def last_hash(self):
