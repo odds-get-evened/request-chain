@@ -165,4 +165,3 @@ class Blockchain:
 
     def __str__(self):
         return "\n".join([json.dumps(b.to_dict(), sort_keys=True) for b in self.chain])
-        # return json.dumps([b.to_dict() for b in self.chain], sort_keys=True, indent=4)
