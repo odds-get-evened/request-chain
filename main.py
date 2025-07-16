@@ -1,4 +1,6 @@
+import pickle
 from enum import IntEnum
+from pathlib import Path
 
 from ecdsa import SigningKey, NIST256p
 
@@ -17,7 +19,18 @@ class MenuItems(IntEnum):
 def main():
     priv_key = SigningKey.generate(curve=NIST256p)
     pub_key = priv_key.get_verifying_key()
-    chain = Blockchain()
+
+    snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
+    snap_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # load pickle file if it exists
+    if snap_path.exists():
+        with open(snap_path, 'rb') as fh:
+            try:
+                chain = pickle.load(fh)
+            except Exception as e:
+                # establish a new chain
+                chain = Blockchain()
 
     menu = """
     1. request (single)
@@ -58,7 +71,7 @@ def main():
         elif choice == MenuItems.RESERVED:
             allocs = chain.allocation()
             if allocs:
-                print("allocated items:")
+                print("allocated items: ")
                 for uid in allocs:
                     print(f" - {uid}")
             else:
@@ -67,14 +80,14 @@ def main():
         elif choice == MenuItems.AVAILABLE:
             a = chain.get_available()
             if a:
-                print("available items:")
+                print("available items: ")
                 for uid in a:
                     print(f" - {uid}")
             else:
                 print("no items are available")
 
         elif choice == MenuItems.MULTI_REQUEST:
-            uids = input("enter item IDs to request:")
+            uids = input("enter item IDs to request: ")
             uids = [u.strip() for u in uids.split(",") if u.strip()]
             txs = []
             for uid in uids:
@@ -89,12 +102,15 @@ def main():
                 print(f"❌ {e}")
 
         elif choice == MenuItems.TEST:
-            print("testing...")
+            print("#----- test area -----#")
             print(chain)
+            print("#----- end test area -----#")
 
         elif choice == MenuItems.EXIT:
+            chain.snapshot(snap_path)
             print("bye, bye")
             break
+
         else:
             print("invalid option.")
 
