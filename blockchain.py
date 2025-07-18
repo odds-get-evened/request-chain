@@ -3,6 +3,7 @@ import pickle
 import time
 from enum import IntEnum, StrEnum
 from hashlib import sha256
+from pathlib import Path
 
 from ecdsa import VerifyingKey, SigningKey, NIST256p
 
@@ -62,7 +63,8 @@ class Transaction:
 
 
 class Block:
-    def __init__(self, idx, prev_hash, txs, nonce=0, ts=None):
+    def __init__(self, idx: int, prev_hash, txs, nonce=0, ts=None):
+        self.hash = None
         self.index = idx
         self.prev_hash = prev_hash
         self.transactions: list[Transaction] = txs
@@ -82,12 +84,22 @@ class Block:
         blk = self.to_dict()
         return sha256(json.dumps(blk, sort_keys=True).encode()).hexdigest()
 
+    def hash_ok(self) -> bool:
+        return self.hash == self.compute_hash()
+
+    def signatures_ok(self):
+        for tx in self.transactions:
+            if not tx.verify():
+                return False
+
+        return True
+
     def __str__(self):
         return json.dumps(self.to_dict(), sort_keys=True)
 
 
 class Blockchain:
-    def __init__(self, difficulty=2):
+    def __init__(self, difficulty: int=2):
         self.chain: list[Block] = []
         self.difficulty: int = difficulty
         self.genesis()
@@ -148,7 +160,7 @@ class Blockchain:
             if tx.tx_type == TxTypes.RELEASE and tx.uid not in cur:
                 raise ValueError(f"item {tx.uid} is ready for request.")
 
-            # provisional update
+            # provisional update for adding/removing items from reserve allocation
             if tx.tx_type == TxTypes.REQUEST:
                 cur.add(tx.uid)
             else:
@@ -159,9 +171,82 @@ class Blockchain:
         blk.hash = self.proof_of_work(blk)
         self.chain.append(blk)
 
-    def snapshot(self, p):
+    def snapshot(self, p: Path):
         with open(p, 'wb') as fh:
             pickle.dump(self, fh, pickle.HIGHEST_PROTOCOL)
+
+    def integrity_check(self) -> bool:
+        """
+        walks the chain and ensures:
+            - each block's stored hash matches the computed_hash()
+            - prev_hash links correctly
+            - all transactions signatures verify.
+        :return: success/failure
+        """
+        for i, blk in enumerate(self.chain):
+            # 1. check block hash
+            if not blk.hash_ok():
+                # print(f"there is problem computing hash for block [{i}]")
+                return False
+            # 2. check block linkage to previous block (skipping genesis block)
+            if not self.linkage_ok(i, blk):
+                # print(f"there is broken link in block [{i}]")
+                return False
+            # 3. check each transaction signature
+            if not blk.signatures_ok():
+                # print(f"there is a transaction with an invalid signature in block [{i}]")
+                return False
+
+        # print("no corruption in blockchain")
+        return True
+
+    def linkage_ok(self, cur_idx: int, cur_blk: Block):
+        if cur_idx > 0:  # ignore genesis block
+            prev = self.chain[cur_idx - 1]
+            if cur_blk.prev_hash != prev.hash:
+                return False
+
+        return True
+
+    def find_bad_block(self) -> int | None:
+        """
+        returns the index of the first block whose
+        hash/linkage/signatures don't check out.
+        :return:
+        """
+        for i, blk in enumerate(self.chain):
+            # found a hash mismatch
+            if not blk.hash_ok():
+                return i
+
+            # found a bad linkage
+            if not self.linkage_ok(i, blk):
+                return i
+
+            # found a bad transaction signature
+            if not blk.signatures_ok():
+                return i
+
+        return None
+
+    def repair(self) -> bool:
+        """
+        if corruption is found, truncate the tail back
+        to the last good block and re-save.
+
+        :return: True if repair was needed, otherwise False
+        """
+        bad_idx = self.find_bad_block()
+        if not bad_idx:     # chain is in good standing
+            return False
+
+        # drop the bad block and everything after it.
+        self.chain = self.chain[:bad_idx]
+        # re-compute the hashes just in case
+        for blk in self.chain:
+            blk.hash = blk.compute_hash()
+
+        return True
 
     def __str__(self):
         return "\n".join([json.dumps(b.to_dict(), sort_keys=True) for b in self.chain])
