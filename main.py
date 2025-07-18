@@ -1,4 +1,7 @@
+import atexit
 import pickle
+import signal
+import sys
 import threading
 import time
 from enum import IntEnum
@@ -20,26 +23,36 @@ class MenuItems(IntEnum):
     EXIT = 7
 
 
+snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
+snap_path.parent.mkdir(parents=True, exist_ok=True)
+
 status_q = Queue()
 
 
 def blockchain_monitor(chain: Blockchain, interval: float = 10.0):
     """
-    periodically verify & repair the chain; enqueue status
+    only reports once when the chain toggles status
     :param chain:
     :param interval:
     :return:
     """
-    while True:
-        if chain.integrity_check():
-            status_q.put("[monitor] chain is A-OK 😁")
-        else:
-            status_q.put("[monitor] ⚠️ CHAIN CORRUPTED ⚠️ repairing...")
+    last_ok: bool | None = None
 
-            if chain.repair():
-                status_q.put("[monitor] ✅ repaired ")
+    while True:
+        cur_ok = chain.integrity_check()
+        # if state is changed, enqueue an update
+        if last_ok is None or cur_ok != last_ok:
+            if cur_ok:
+                status_q.put("[monitor 😁] chain is A-OK!")
             else:
-                status_q.put("[monitor] ❌ repair failed")
+                status_q.put("[monitor ⚠️] corruption detected -- repairing...")
+
+                if chain.repair():
+                    status_q.put("[monitor ✅] repair completed.")
+                else:
+                    status_q.put("[monitor ❌] repair failed.")
+
+            last_ok = cur_ok
 
         time.sleep(interval)
 
@@ -55,12 +68,14 @@ def get_user_input(prompt: str) -> str:
     return input(prompt)
 
 
+def cleanup(chain: Blockchain, p: Path):
+    # always snapshot on exit
+    chain.snapshot(p)
+    print("\nbye, bye!")
+
 def main():
     priv_key = SigningKey.generate(curve=NIST256p)
     pub_key = priv_key.get_verifying_key()
-
-    snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
-    snap_path.parent.mkdir(parents=True, exist_ok=True)
 
     # load pickle file if it exists
     if snap_path.exists():
@@ -72,6 +87,11 @@ def main():
     else:
         # establish a new chain
         chain = Blockchain()
+
+    # register for normal and forced exits
+    atexit.register(cleanup, chain, snap_path)
+    signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
+    signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
 
     # start background monitoring
     threading.Thread(target=blockchain_monitor, args=(chain, 5.0), daemon=True).start()
@@ -151,8 +171,7 @@ def main():
             print("#----- end test area -----#")
 
         elif choice == MenuItems.EXIT:
-            chain.snapshot(snap_path)
-            print("bye, bye")
+            # cleanup(chain, snap_path)
             break
 
         else:
