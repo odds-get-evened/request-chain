@@ -1,4 +1,6 @@
 import pickle
+import threading
+import time
 from enum import IntEnum
 from pathlib import Path
 
@@ -16,6 +18,20 @@ class MenuItems(IntEnum):
     TEST = 6
     EXIT = 7
 
+
+def blockchain_monitor(chain: Blockchain, interval: float = 10.0):
+    while True:
+        if chain.integrity_check():
+            print(f"[monitor] ✅ chain is a-ok 😁")
+        else:
+            print("⚠️ CHAIN CORRUPTED ⚠️ repairing...")
+            repair = chain.repair()
+            status = "repaired ✅" if repair else "repair failed ❌"
+            print(f"[monitor] {status}")
+
+        time.sleep(interval)
+
+
 def main():
     priv_key = SigningKey.generate(curve=NIST256p)
     pub_key = priv_key.get_verifying_key()
@@ -29,8 +45,14 @@ def main():
             try:
                 chain = pickle.load(fh)
             except Exception as e:
-                # establish a new chain
-                chain = Blockchain()
+                pass
+    else:
+        # establish a new chain
+        chain = Blockchain()
+
+    # start background monitoring
+    mon_t = threading.Thread(target=blockchain_monitor, args=(chain, 5.0), daemon=True)
+    mon_t.start()
 
     menu = """
     1. request (single)
@@ -59,7 +81,7 @@ def main():
 
         elif choice == MenuItems.RELEASE:
             uid = input(f"item ID to release: ").strip()
-            tx  = Transaction(pub_key, uid, tx_type=TxTypes.RELEASE)
+            tx = Transaction(pub_key, uid, tx_type=TxTypes.RELEASE)
             tx.sign(priv_key)
 
             try:
