@@ -3,6 +3,7 @@ import threading
 import time
 from enum import IntEnum
 from pathlib import Path
+from queue import Queue, Empty
 
 from ecdsa import SigningKey, NIST256p
 
@@ -19,17 +20,39 @@ class MenuItems(IntEnum):
     EXIT = 7
 
 
+status_q = Queue()
+
+
 def blockchain_monitor(chain: Blockchain, interval: float = 10.0):
+    """
+    periodically verify & repair the chain; enqueue status
+    :param chain:
+    :param interval:
+    :return:
+    """
     while True:
         if chain.integrity_check():
-            print(f"[monitor] ✅ chain is a-ok 😁")
+            status_q.put("[monitor] chain is A-OK 😁")
         else:
-            print("⚠️ CHAIN CORRUPTED ⚠️ repairing...")
-            repair = chain.repair()
-            status = "repaired ✅" if repair else "repair failed ❌"
-            print(f"[monitor] {status}")
+            status_q.put("[monitor] ⚠️ CHAIN CORRUPTED ⚠️ repairing...")
+
+            if chain.repair():
+                status_q.put("[monitor] ✅ repaired ")
+            else:
+                status_q.put("[monitor] ❌ repair failed")
 
         time.sleep(interval)
+
+
+def get_user_input(prompt: str) -> str:
+    # drain any pending monitor messages first
+    try:
+        while True:
+            print(status_q.get_nowait())
+    except Empty:
+        pass
+
+    return input(prompt)
 
 
 def main():
@@ -51,8 +74,7 @@ def main():
         chain = Blockchain()
 
     # start background monitoring
-    mon_t = threading.Thread(target=blockchain_monitor, args=(chain, 5.0), daemon=True)
-    mon_t.start()
+    threading.Thread(target=blockchain_monitor, args=(chain, 5.0), daemon=True).start()
 
     menu = """
     1. request (single)
@@ -65,7 +87,7 @@ def main():
     """
 
     while True:
-        choice = input(menu + "\nselect > ")
+        choice = get_user_input(menu + "\nselect > ").strip()
         choice = int(choice.strip())
 
         if choice == MenuItems.REQUEST:
