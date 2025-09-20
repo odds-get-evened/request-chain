@@ -5,7 +5,9 @@ from enum import IntEnum, StrEnum
 from hashlib import sha256
 from pathlib import Path
 
-from ecdsa import VerifyingKey, SigningKey, NIST256p
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.exceptions import InvalidSignature
 
 
 class TxTypes(IntEnum):
@@ -31,9 +33,24 @@ class BlockKeys(StrEnum):
 BIT_OP = "0"
 
 
+def serialize_pubkey(pubkey: ec.EllipticCurvePublicKey) -> str:
+    # sec1 compressed format
+    return pubkey.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.CompressedPoint
+    ).hex()
+
+
+def deserialize_pubkey(hex_s: str) -> ec.EllipticCurvePublicKey:
+    return ec.EllipticCurvePublicKey.from_encoded_point(
+        ec.SECP256R1(),
+        bytes.fromhex(hex_s)
+    )
+
+
 class Transaction:
-    def __init__(self, pub_key: VerifyingKey, uid, tx_type=TxTypes.REQUEST, ts=None, sig=None):
-        self.requester = pub_key.to_string().hex()
+    def __init__(self, pub_key: ec.EllipticCurvePublicKey, uid, tx_type=TxTypes.REQUEST, ts=None, sig=None):
+        self.requester = serialize_pubkey(pub_key)
         self.uid = uid
         self.tx_type = tx_type
         self.timestamp = ts or time.time()
@@ -47,16 +64,21 @@ class Transaction:
             TxKeys.TIMESTAMP: self.timestamp
         }
 
-    def sign(self, priv_key: SigningKey):
+    def sign(self, priv_key: ec.EllipticCurvePrivateKey):
         d = json.dumps(self.to_dict(), sort_keys=True).encode()
 
-        self.signature = priv_key.sign(d).hex()
+        sig = priv_key.sign(d, ec.ECDSA(hashes.SHA256()))
+        self.signature = sig.hex()
 
     def verify(self):
-        vk = VerifyingKey.from_string(bytes.fromhex(self.requester), curve=NIST256p)
+        pubk = deserialize_pubkey(self.requester)
         d = json.dumps(self.to_dict(), sort_keys=True).encode()
+        try:
+            pubk.verify(bytes.fromhex(self.signature), d, ec.ECDSA(hashes.SHA256()))
 
-        return vk.verify(bytes.fromhex(self.signature), d)
+            return True
+        except InvalidSignature:
+            return False
 
     def __str__(self):
         return json.dumps(self.to_dict(), sort_keys=True)
@@ -99,7 +121,7 @@ class Block:
 
 
 class Blockchain:
-    def __init__(self, difficulty: int=2):
+    def __init__(self, difficulty: int = 2):
         self.chain: list[Block] = []
         self.difficulty: int = difficulty
         self.genesis()
@@ -237,7 +259,7 @@ class Blockchain:
         :return: True if repair was needed, otherwise False
         """
         bad_idx = self.find_bad_block()
-        if not bad_idx:     # chain is in good standing
+        if not bad_idx:  # chain is in good standing
             return False
 
         # drop the bad block and everything after it.

@@ -8,7 +8,7 @@ from enum import IntEnum
 from pathlib import Path
 from queue import Queue, Empty
 
-from ecdsa import SigningKey, NIST256p
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from blockchain import Blockchain, Transaction, TxTypes
 
@@ -73,9 +73,10 @@ def cleanup(chain: Blockchain, p: Path):
     chain.snapshot(p)
     print("\nbye, bye!")
 
+
 def main():
-    priv_key = SigningKey.generate(curve=NIST256p)
-    pub_key = priv_key.get_verifying_key()
+    priv_key = ec.generate_private_key(ec.SECP256R1())
+    pub_key = priv_key.public_key()
 
     # load pickle file if it exists
     if snap_path.exists():
