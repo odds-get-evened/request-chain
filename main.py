@@ -20,7 +20,8 @@ class MenuItems(IntEnum):
     AVAILABLE = 4
     MULTI_REQUEST = 5
     TEST = 6
-    EXIT = 7
+    STATUS = 7
+    EXIT = 8
 
 
 snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
@@ -104,7 +105,8 @@ def main():
     4. list available items
     5. request (multiple)
     6. testing...
-    7. exit
+    7. report blockchain status
+    8. exit
     """
 
     while True:
@@ -170,6 +172,13 @@ def main():
             print("#----- test area -----#")
             print(chain)
             print("#----- end test area -----#")
+
+        elif choice == MenuItems.STATUS:
+            ok = chain.integrity_check()
+            print(f"[status] blockchain is {"A-OK! 😁" if ok else "CORRUPTED! ⚠️"}")
+            print(f"[status] block count: {len(chain.chain)}")
+            print(f"[status] reserved items: {len(chain.allocation())}")
+            print(f"[status] available items: {len(chain.get_available())}")
 
         elif choice == MenuItems.EXIT:
             # cleanup(chain, snap_path)
