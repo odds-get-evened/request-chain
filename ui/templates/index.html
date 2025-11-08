@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>request-chain Visual Monitor (Live)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Bootstrap for quick layout and Chart.js for charts -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/static/style.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="bg-light">
+  <div class="container py-4">
+    <h1 class="mb-3">request-chain — live blockchain UI</h1>
+
+    <div class="row g-3">
+      <!-- Left column: wallet and actions -->
+      <div class="col-lg-4">
+        <div class="card mb-3">
+          <div class="card-header">Wallet (demo)</div>
+          <div class="card-body">
+            <button id="btn-gen" class="btn btn-primary btn-sm mb-2">Generate Keypair</button>
+            <div class="small text-muted mb-1">Public key (short):</div>
+            <div id="pubshort" class="code-block small mb-2"></div>
+            <div class="small text-muted mb-1">Private key (PEM) — keep secret</div>
+            <textarea id="privpem" class="form-control code-block" rows="5" placeholder="Private key PEM"></textarea>
+            <div class="text-muted small mt-2">Use the private key to sign transactions (demo only).</div>
+          </div>
+        </div>
+
+        <div class="card mb-3">
+          <div class="card-header">Create a Transaction</div>
+          <div class="card-body">
+            <label class="form-label">Item ID</label>
+            <input id="tx-uid" class="form-control mb-2" placeholder="item-001">
+            <label class="form-label">Type</label>
+            <select id="tx-type" class="form-select mb-2">
+              <option value="1">Request</option>
+              <option value="2">Release</option>
+            </select>
+            <button id="btn-create-tx" class="btn btn-success btn-sm">Create & Sign</button>
+            <div class="mt-3">
+              <div class="small text-muted">Recent created transactions (pool)</div>
+              <ul id="pool-list" class="list-group mt-2" style="max-height:180px; overflow:auto;"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">Mining</div>
+          <div class="card-body">
+            <button id="btn-mine" class="btn btn-primary btn-sm mb-2">Mine Block (use pool)</button>
+            <button id="btn-clear-pool" class="btn btn-outline-danger btn-sm mb-2">Clear Pool</button>
+            <div class="small text-muted">Use mining to append the transaction pool to the chain.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right column: visuals -->
+      <div class="col-lg-8">
+        <div class="card mb-3">
+          <div class="card-header">Chain Overview</div>
+          <div class="card-body">
+            <div class="row gy-2">
+              <div class="col-md-4">
+                <div class="stat-card">
+                  <div class="stat-value" id="stat-length">0</div>
+                  <div class="stat-label">Blocks</div>
+                </div>
+              </div>
+              <div class="col-md-4">
+                <div class="stat-card">
+                  <div class="stat-value" id="stat-difficulty">0</div>
+                  <div class="stat-label">Difficulty</div>
+                </div>
+              </div>
+              <div class="col-md-4">
+                <div class="stat-card">
+                  <div class="stat-value" id="stat-integrity">OK</div>
+                  <div class="stat-label">Integrity</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row mt-3 gy-3">
+              <div class="col-md-6">
+                <canvas id="txsChart" height="200"></canvas>
+              </div>
+              <div class="col-md-6">
+                <canvas id="allocChart" height="200"></canvas>
+              </div>
+            </div>
+
+            <hr>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <h5 class="mb-0">Blocks (live)</h5>
+              <button id="btn-refresh-chain" class="btn btn-sm btn-outline-secondary" onclick="/* fallback refresh */ location.reload()">Reload Page</button>
+            </div>
+            <div id="block-rail" class="block-rail"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">Developer Tools (safe demo)</div>
+          <div class="card-body">
+            <div class="row g-2">
+              <div class="col-sm-4">
+                <input id="corrupt-index" class="form-control" placeholder="Block index">
+              </div>
+              <div class="col-sm-4">
+                <select id="corrupt-field" class="form-select">
+                  <option value="nonce">nonce</option>
+                  <option value="prev_hash">prev_hash</option>
+                  <option value="timestamp">timestamp</option>
+                </select>
+              </div>
+              <div class="col-sm-4">
+                <input id="corrupt-value" class="form-control" placeholder="Value">
+              </div>
+            </div>
+            <div class="mt-2">
+              <button id="btn-corrupt" class="btn btn-danger btn-sm">Corrupt Block</button>
+              <button id="btn-repair" class="btn btn-warning btn-sm">Repair Chain</button>
+              <button id="btn-save-chain" class="btn btn-outline-success btn-sm">Save</button>
+              <button id="btn-load-chain" class="btn btn-outline-primary btn-sm">Load</button>
+            </div>
+            <div class="small text-muted mt-2">Corruption is for demonstration of integrity detection and repair.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer class="mt-4 text-muted small">This UI is a demo. Do not store real private keys here.</footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

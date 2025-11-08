@@ -16,6 +16,7 @@ class TxTypes(IntEnum):
 
 
 class TxKeys(StrEnum):
+    SIG = "signature"
     REQUESTER = "requester"
     UID = "uid"
     TYPE = "type"
@@ -23,6 +24,7 @@ class TxKeys(StrEnum):
 
 
 class BlockKeys(StrEnum):
+    HASH = "hash"
     INDEX = "index"
     PREV_HASH = "prev_hash"
     TXS = "transactions"
@@ -64,6 +66,15 @@ class Transaction:
             TxKeys.TIMESTAMP: self.timestamp
         }
 
+    def to_full_dict(self):
+        """
+        Extended representation including signature for UI/inspection.
+        This is not used by compute_hash() to preserve original behavior.
+        """
+        d = self.to_dict()
+        d[TxKeys.SIG] = self.signature
+        return d
+
     def sign(self, priv_key: ec.EllipticCurvePrivateKey):
         d = json.dumps(self.to_dict(), sort_keys=True).encode()
 
@@ -100,6 +111,19 @@ class Block:
             BlockKeys.TXS: [tx.to_dict() for tx in self.transactions],
             BlockKeys.NONCE: self.nonce,
             BlockKeys.TIMESTAMP: self.timestamp
+        }
+
+    def to_full_dict(self) -> dict:
+        """
+        Extended representation including signatures in transactions for UI display.
+        """
+        return {
+            BlockKeys.INDEX: self.index,
+            BlockKeys.PREV_HASH: self.prev_hash,
+            BlockKeys.TXS: [tx.to_full_dict() for tx in self.transactions],
+            BlockKeys.NONCE: self.nonce,
+            BlockKeys.TIMESTAMP: self.timestamp,
+            BlockKeys.HASH: self.hash
         }
 
     def compute_hash(self) -> str:
@@ -272,3 +296,18 @@ class Blockchain:
 
     def __str__(self):
         return "\n".join([json.dumps(b.to_dict(), sort_keys=True) for b in self.chain])
+
+    @staticmethod
+    def init(p: Path, difficulty: int = 2):
+        # load pickle file if it exists
+        if p.exists():
+            with open(p, 'rb') as fh:
+                try:
+                    chain = pickle.load(fh)
+                except Exception as e:
+                    raise FileExistsError(f"{str(p)} does not exist.")
+        else:
+            # establish a new chain
+            chain = Blockchain()
+
+        return chain
