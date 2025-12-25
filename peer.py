@@ -119,9 +119,31 @@ def setup_network_callbacks(network: P2PNetwork, chain: Blockchain):
             'length': len(chain.chain)
         }
 
+    def handle_chain_response(response_data: dict):
+        """Handle chain response from peer (consensus mechanism)"""
+        try:
+            peer_chain = response_data.get('chain', [])
+            peer_length = response_data.get('length', 0)
+
+            status_q.put(f"[consensus 📡] received chain (length {peer_length}) vs ours (length {len(chain.chain)})")
+
+            # Try to replace our chain if peer's is longer and valid
+            if chain.replace_chain(peer_chain):
+                status_q.put(f"[consensus ✅] adopted longer chain ({peer_length} blocks)")
+                chain.snapshot(snap_path)
+            else:
+                if peer_length > len(chain.chain):
+                    status_q.put(f"[consensus ❌] peer chain failed validation")
+                else:
+                    status_q.put(f"[consensus ℹ️] kept current chain (already longest)")
+
+        except Exception as e:
+            status_q.put(f"[consensus ❌] error processing chain: {e}")
+
     network.on_new_block = handle_new_block
     network.on_new_transaction = handle_new_transaction
     network.on_chain_request = handle_chain_request
+    network.on_chain_response = handle_chain_response
 
 
 def main():
@@ -164,7 +186,7 @@ def main():
     5. request (multiple)
     6. connect to peer
     7. list connected peers
-    8. sync chain from network
+    8. sync chain from network (consensus)
     9. report blockchain status
     10. exit
     """
@@ -255,7 +277,7 @@ def main():
                 print("no peers connected")
 
         elif choice == MenuItems.SYNC_CHAIN:
-            print("📡 requesting chain from peers...")
+            print("📡 requesting chains from all peers (consensus mechanism will choose longest valid chain)...")
             p2p.request_chain_from_peers()
 
         elif choice == MenuItems.STATUS:

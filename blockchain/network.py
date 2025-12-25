@@ -1,6 +1,7 @@
 import json
 import socket
 import threading
+import time
 from typing import Set, Callable, Dict, Any
 from dataclasses import dataclass, asdict
 from enum import StrEnum
@@ -47,6 +48,14 @@ class Peer:
         self.send_queue = Queue()
         self.lock = threading.Lock()
 
+        # Statistics
+        self.connected_at = time.time()
+        self.last_seen = time.time()
+        self.blocks_received = 0
+        self.transactions_received = 0
+        self.messages_sent = 0
+        self.messages_received = 0
+
     def __hash__(self):
         return hash(self.address)
 
@@ -56,6 +65,13 @@ class Peer:
     def send(self, message: Message):
         """Queue message for sending"""
         self.send_queue.put(message)
+        self.messages_sent += 1
+        self.last_seen = time.time()
+
+    def record_message_received(self):
+        """Record that a message was received"""
+        self.messages_received += 1
+        self.last_seen = time.time()
 
     def close(self):
         """Close peer connection"""
@@ -82,6 +98,7 @@ class P2PNetwork:
         self.on_new_block: Callable = None
         self.on_new_transaction: Callable = None
         self.on_chain_request: Callable = None
+        self.on_chain_response: Callable = None
 
     def start(self):
         """Start the P2P server"""
@@ -156,6 +173,8 @@ class P2PNetwork:
 
     def _route_message(self, msg: Message, peer: Peer):
         """Route message to appropriate handler"""
+        peer.record_message_received()
+
         if msg.type == MessageType.PEER_ANNOUNCE:
             # Send back our peer list
             with self.peers_lock:
@@ -170,12 +189,19 @@ class P2PNetwork:
                 response = Message(MessageType.CHAIN_RESPONSE, chain_data, self.address)
                 peer.send(response)
 
+        elif msg.type == MessageType.CHAIN_RESPONSE:
+            # Callback to handle chain response
+            if self.on_chain_response:
+                self.on_chain_response(msg.payload)
+
         elif msg.type == MessageType.NEW_BLOCK:
+            peer.blocks_received += 1
             # Callback to handle new block
             if self.on_new_block:
                 self.on_new_block(msg.payload)
 
         elif msg.type == MessageType.NEW_TRANSACTION:
+            peer.transactions_received += 1
             # Callback to handle new transaction
             if self.on_new_transaction:
                 self.on_new_transaction(msg.payload)
