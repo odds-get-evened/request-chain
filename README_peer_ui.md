@@ -1,4 +1,4 @@
-# Blockchain Peer - GUI Version
+# RequestChain Peer - GUI Version
 
 Tkinter-based UI for the blockchain peer with menubar, modal dialogs, and automatic background monitoring.
 
