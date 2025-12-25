@@ -11,6 +11,7 @@ from queue import Queue, Empty
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from blockchain.blockchain import Blockchain, Transaction, TxTypes
+from blockchain.network import P2PNetwork
 
 
 class MenuItems(IntEnum):
@@ -19,9 +20,11 @@ class MenuItems(IntEnum):
     RESERVED = 3
     AVAILABLE = 4
     MULTI_REQUEST = 5
-    TEST = 6
-    STATUS = 7
-    EXIT = 8
+    CONNECT_PEER = 6
+    LIST_PEERS = 7
+    SYNC_CHAIN = 8
+    STATUS = 9
+    EXIT = 10
 
 
 snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
@@ -69,13 +72,62 @@ def get_user_input(prompt: str) -> str:
     return input(prompt)
 
 
-def cleanup(chain: Blockchain, p: Path):
+def cleanup(chain: Blockchain, p: Path, network: P2PNetwork):
     # always snapshot on exit
     chain.snapshot(p)
+    network.stop()
     print("\nbye, bye!")
 
 
+def setup_network_callbacks(network: P2PNetwork, chain: Blockchain):
+    """Configure P2P network callbacks"""
+
+    def handle_new_block(block_data: dict):
+        """Handle incoming block from peer"""
+        try:
+            # Reconstruct block and validate
+            from blockchain.blockchain import Block, deserialize_pubkey
+
+            txs = []
+            for tx_dict in block_data.get('transactions', []):
+                pub = deserialize_pubkey(tx_dict['requester'])
+                tx = Transaction(
+                    pub,
+                    tx_dict['uid'],
+                    tx_dict['type'],
+                    tx_dict.get('timestamp'),
+                    tx_dict.get('signature')
+                )
+                txs.append(tx)
+
+            # Validate and add block if it extends our chain
+            if len(chain.chain) == block_data['index']:
+                chain.add_block(txs)
+                status_q.put(f"[network 📦] received and added block #{block_data['index']}")
+                chain.snapshot(snap_path)
+        except Exception as e:
+            status_q.put(f"[network ❌] failed to process block: {e}")
+
+    def handle_new_transaction(tx_data: dict):
+        """Handle incoming transaction from peer"""
+        status_q.put(f"[network 💳] received transaction: {tx_data.get('uid')}")
+
+    def handle_chain_request() -> dict:
+        """Send our chain to requesting peer"""
+        return {
+            'chain': [b.to_full_dict() for b in chain.chain],
+            'length': len(chain.chain)
+        }
+
+    network.on_new_block = handle_new_block
+    network.on_new_transaction = handle_new_transaction
+    network.on_chain_request = handle_chain_request
+
+
 def main():
+    # Get port from command line or use default
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 6000
+
     priv_key = ec.generate_private_key(ec.SECP256R1())
     pub_key = priv_key.public_key()
 
@@ -85,28 +137,36 @@ def main():
             try:
                 chain = pickle.load(fh)
             except Exception as e:
-                pass
+                chain = Blockchain()
     else:
         # establish a new chain
         chain = Blockchain()
 
+    # Initialize P2P network
+    p2p = P2PNetwork(host="0.0.0.0", port=port)
+    setup_network_callbacks(p2p, chain)
+    p2p.start()
+
     # register for normal and forced exits
-    atexit.register(cleanup, chain, snap_path)
+    atexit.register(cleanup, chain, snap_path, p2p)
     signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
 
     # start background monitoring
     threading.Thread(target=blockchain_monitor, args=(chain, 5.0), daemon=True).start()
 
-    menu = """
+    menu = f"""
+    === Blockchain Node (Port {port}) ===
     1. request (single)
     2. release (single)
     3. list reserved items
     4. list available items
     5. request (multiple)
-    6. testing...
-    7. report blockchain status
-    8. exit
+    6. connect to peer
+    7. list connected peers
+    8. sync chain from network
+    9. report blockchain status
+    10. exit
     """
 
     while True:
@@ -121,6 +181,10 @@ def main():
             try:
                 chain.add_block([tx])
                 print(f"✅ requested {uid}")
+
+                # Broadcast to network
+                p2p.announce_new_block(chain.chain[-1].to_full_dict())
+                chain.snapshot(snap_path)
             except ValueError as e:
                 print(f"❌ {e}")
 
@@ -132,6 +196,10 @@ def main():
             try:
                 chain.add_block([tx])
                 print(f"✅ released {uid}")
+
+                # Broadcast to network
+                p2p.announce_new_block(chain.chain[-1].to_full_dict())
+                chain.snapshot(snap_path)
             except ValueError as e:
                 print(f"❌ {e}")
 
@@ -165,13 +233,30 @@ def main():
             try:
                 chain.add_block(txs)
                 print(f"✅ requested {', '.join(uids)}.")
+
+                # Broadcast to network
+                p2p.announce_new_block(chain.chain[-1].to_full_dict())
+                chain.snapshot(snap_path)
             except ValueError as e:
                 print(f"❌ {e}")
 
-        elif choice == MenuItems.TEST:
-            print("#----- test area -----#")
-            print(chain)
-            print("#----- end test area -----#")
+        elif choice == MenuItems.CONNECT_PEER:
+            host = input("peer host (e.g. localhost): ").strip()
+            peer_port = int(input("peer port (e.g. 6001): ").strip())
+            p2p.connect_to_peer(host, peer_port)
+            print(f"🔗 connecting to {host}:{peer_port}...")
+
+        elif choice == MenuItems.LIST_PEERS:
+            if p2p.peers:
+                print(f"connected peers ({len(p2p.peers)}):")
+                for peer in p2p.peers:
+                    print(f" - {peer.address}")
+            else:
+                print("no peers connected")
+
+        elif choice == MenuItems.SYNC_CHAIN:
+            print("📡 requesting chain from peers...")
+            p2p.request_chain_from_peers()
 
         elif choice == MenuItems.STATUS:
             ok = chain.integrity_check()
@@ -179,9 +264,9 @@ def main():
             print(f"[status] block count: {len(chain.chain)}")
             print(f"[status] reserved items: {len(chain.allocation())}")
             print(f"[status] available items: {len(chain.get_available())}")
+            print(f"[status] connected peers: {len(p2p.peers)}")
 
         elif choice == MenuItems.EXIT:
-            # cleanup(chain, snap_path)
             break
 
         else:
