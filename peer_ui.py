@@ -20,7 +20,8 @@ class BlockchainPeerUI:
         self._cleaning_up = False
         self.root = root
         self.port = port
-        self.root.title(f"Blockchain Peer - Port {port}")
+        self.root.title(f"RequestChain Peer - Port {port}")
+        self.pos = {}
         self.root.geometry("900x700")
 
         # Blockchain setup
