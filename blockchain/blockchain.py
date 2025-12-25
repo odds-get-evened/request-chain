@@ -294,6 +294,60 @@ class Blockchain:
 
         return True
 
+    def replace_chain(self, new_chain: list[dict]) -> bool:
+        """
+        Replace our chain with a longer valid chain (consensus mechanism).
+        Only accepts chains that are:
+        1. Longer than current chain
+        2. Pass full integrity check
+
+        :param new_chain: List of block dicts from peer
+        :return: True if chain was replaced
+        """
+        if len(new_chain) <= len(self.chain):
+            return False
+
+        # Reconstruct blockchain from dicts
+        temp_blockchain = Blockchain(difficulty=self.difficulty)
+        temp_blockchain.chain = []
+
+        try:
+            for blk_dict in new_chain:
+                # Reconstruct transactions
+                txs = []
+                for tx_dict in blk_dict.get('transactions', []):
+                    pub = deserialize_pubkey(tx_dict['requester'])
+                    tx = Transaction(
+                        pub,
+                        tx_dict['uid'],
+                        tx_dict['type'],
+                        tx_dict.get('timestamp'),
+                        tx_dict.get('signature')
+                    )
+                    txs.append(tx)
+
+                # Reconstruct block
+                blk = Block(
+                    blk_dict['index'],
+                    blk_dict['prev_hash'],
+                    txs,
+                    blk_dict.get('nonce', 0),
+                    blk_dict.get('timestamp')
+                )
+                blk.hash = blk_dict.get('hash')
+                temp_blockchain.chain.append(blk)
+
+            # Validate the new chain
+            if temp_blockchain.integrity_check():
+                self.chain = temp_blockchain.chain
+                self.difficulty = temp_blockchain.difficulty
+                return True
+
+        except Exception as e:
+            print(f"Failed to validate peer chain: {e}")
+
+        return False
+
     def __str__(self):
         return "\n".join([json.dumps(b.to_dict(), sort_keys=True) for b in self.chain])
 
