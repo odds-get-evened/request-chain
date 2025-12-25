@@ -305,9 +305,9 @@ class Blockchain:
                 try:
                     chain = pickle.load(fh)
                 except Exception as e:
-                    raise FileExistsError(f"{str(p)} does not exist.")
+                    raise FileExistsError(f"{str(p)} does not exist. {str(e)}")
         else:
             # establish a new chain
-            chain = Blockchain()
+            chain = Blockchain(difficulty=difficulty)
 
         return chain
