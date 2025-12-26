@@ -1,8 +1,6 @@
 from pathlib import Path
-from typing import Any
 
-from tinydb import TinyDB, where
-from tinydb.table import Table
+from tinydb import TinyDB
 
 KEY_PRIV_KEY = 'private_key'
 KEY_SIG = 'signature'

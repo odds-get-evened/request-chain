@@ -11,17 +11,15 @@ from queue import Queue, Empty
 
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from blockchain.blockchain import Blockchain, Transaction, TxTypes
+from blockchain.blockchain import Blockchain, Transaction, TxTypes, ITEM_REQUEST_COST
 from blockchain.network import P2PNetwork
 
 
 class BlockchainPeerUI:
     def __init__(self, root, port: int = 6000):
-        self._cleaning_up = False
         self.root = root
         self.port = port
-        self.root.title(f"RequestChain Peer - Port {port}")
-        self.pos = {}
+        self.root.title(f"Blockchain Peer - Port {port}")
         self.root.geometry("900x700")
 
         # Blockchain setup
@@ -45,6 +43,10 @@ class BlockchainPeerUI:
         # Track last state for smart updates
         self._last_chain_length = 0
         self._last_peer_count = 0
+
+        # Auto-mining
+        self.auto_mining_enabled = tk.BooleanVar(value=False)
+        self.auto_mining_active = False
 
         # Setup UI
         self._create_ui()
@@ -81,7 +83,7 @@ class BlockchainPeerUI:
 
         # Main container
         main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky='nsew')
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         # Configure grid weights
         self.root.columnconfigure(0, weight=1)
@@ -91,7 +93,7 @@ class BlockchainPeerUI:
 
         # === Left Panel: Actions ===
         left_frame = ttk.LabelFrame(main_frame, text="Batch Operations", padding="10")
-        left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
         left_frame.rowconfigure(3, weight=1)
 
         # Instructions
@@ -108,7 +110,7 @@ class BlockchainPeerUI:
         ttk.Label(left_frame, text="Or enter manually:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
 
         entry_frame = ttk.Frame(left_frame)
-        entry_frame.grid(row=2, column=0, columnspan=2, sticky='ew', pady=5)
+        entry_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         entry_frame.columnconfigure(0, weight=1)
 
         self.item_id_entry = ttk.Entry(entry_frame)
@@ -124,14 +126,14 @@ class BlockchainPeerUI:
         self.item_id_entry.bind('<Return>', lambda e: self.add_to_batch_manual())
 
         ttk.Button(left_frame, text="Add to Batch", command=self.add_to_batch_manual).grid(
-            row=3, column=0, columnspan=2, sticky='ew', pady=(0, 15))
+            row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 15))
 
         # Batch list with action indicators
         ttk.Label(left_frame, text="Batch Queue:", font=('TkDefaultFont', 9, 'bold')).grid(
             row=4, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         list_frame = ttk.Frame(left_frame)
-        list_frame.grid(row=5, column=0, columnspan=2, sticky='nsew', pady=5)
+        list_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
 
@@ -151,25 +153,44 @@ class BlockchainPeerUI:
 
         # Control buttons
         btn_frame = ttk.Frame(left_frame)
-        btn_frame.grid(row=6, column=0, columnspan=2, sticky='ew', pady=5)
+        btn_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         ttk.Button(btn_frame, text="Remove", command=self.remove_from_batch, width=12).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="Clear All", command=self.clear_batch, width=12).pack(side=tk.LEFT, padx=2)
 
         # Execute batch
         self.execute_btn = ttk.Button(left_frame, text="Execute Batch", command=self.execute_batch)
-        self.execute_btn.grid(row=7, column=0, columnspan=2, sticky='ew', pady=(5, 0))
+        self.execute_btn.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(5, 0))
         self.update_execute_button()
+
+        # Mine block button
+        ttk.Separator(left_frame, orient=tk.HORIZONTAL).grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E),
+                                                             pady=15)
+
+        mine_label = ttk.Label(left_frame, text="Mining:", font=('TkDefaultFont', 9, 'bold'))
+        mine_label.grid(row=9, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
+
+        self.mine_btn = ttk.Button(left_frame, text="Mine Block from Mempool", command=self.mine_block)
+        self.mine_btn.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E))
+
+        # Auto-mine checkbox
+        auto_mine_check = ttk.Checkbutton(
+            left_frame,
+            text="⚡ Auto-mine (background)",
+            variable=self.auto_mining_enabled,
+            command=self.toggle_auto_mining
+        )
+        auto_mine_check.grid(row=11, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
 
         # === Right Panel: Tabs ===
         right_frame = ttk.Frame(main_frame)
-        right_frame.grid(row=0, column=1, sticky='nsew')
+        right_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
         right_frame.columnconfigure(0, weight=1)
         right_frame.rowconfigure(1, weight=1)
 
         # Status indicators
         status_frame = ttk.LabelFrame(right_frame, text="Status", padding="10")
-        status_frame.grid(row=0, column=0, sticky='ew', pady=(0, 5))
+        status_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         status_frame.columnconfigure(1, weight=1)
 
         ttk.Label(status_frame, text="Chain Length:").grid(row=0, column=0, sticky=tk.W)
@@ -189,9 +210,17 @@ class BlockchainPeerUI:
         self.reserved_label = ttk.Label(status_frame, text="0", font=('TkDefaultFont', 10, 'bold'))
         self.reserved_label.grid(row=1, column=3, sticky=tk.W, padx=10, pady=5)
 
+        ttk.Label(status_frame, text="Mempool:").grid(row=0, column=4, sticky=tk.W, padx=(20, 0))
+        self.mempool_label = ttk.Label(status_frame, text="0", font=('TkDefaultFont', 10, 'bold'))
+        self.mempool_label.grid(row=0, column=5, sticky=tk.W, padx=10)
+
+        ttk.Label(status_frame, text="Balance:").grid(row=1, column=4, sticky=tk.W, padx=(20, 0), pady=5)
+        self.balance_label = ttk.Label(status_frame, text="0.0", font=('TkDefaultFont', 10, 'bold'), foreground='blue')
+        self.balance_label.grid(row=1, column=5, sticky=tk.W, padx=10, pady=5)
+
         # Tabbed notebook
         self.notebook = ttk.Notebook(right_frame)
-        self.notebook.grid(row=1, column=0, sticky='nsew')
+        self.notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
         # === Tab 1: Overview ===
         self._create_overview_tab()
@@ -242,7 +271,7 @@ class BlockchainPeerUI:
         # Headers with instructions
         reserved_header = ttk.Label(
             overview_frame,
-            text="Reserved Items (double-click to release)",
+            text="Reserved Items (double-click to release) [demand, expected refund]",
             font=('TkDefaultFont', 9, 'bold')
         )
         reserved_header.grid(row=0, column=0, sticky=tk.W, padx=5)
@@ -256,13 +285,13 @@ class BlockchainPeerUI:
 
         # Reserved listbox
         reserved_frame = ttk.Frame(overview_frame)
-        reserved_frame.grid(row=1, column=0, sticky='nsew', pady=5, padx=5)
+        reserved_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5, padx=5)
 
         reserved_scrollbar = ttk.Scrollbar(reserved_frame)
         reserved_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.reserved_listbox = tk.Listbox(reserved_frame, yscrollcommand=reserved_scrollbar.set,
-                                           selectmode=tk.SINGLE)
+                                           selectmode=tk.SINGLE, font=('Courier', 9))
         self.reserved_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         reserved_scrollbar.config(command=self.reserved_listbox.yview)
 
@@ -271,7 +300,7 @@ class BlockchainPeerUI:
 
         # Available listbox
         available_frame = ttk.Frame(overview_frame)
-        available_frame.grid(row=1, column=1, sticky='nsew', pady=5, padx=5)
+        available_frame.grid(row=1, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5, padx=5)
 
         available_scrollbar = ttk.Scrollbar(available_frame)
         available_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -294,7 +323,7 @@ class BlockchainPeerUI:
 
         # Peers treeview
         tree_frame = ttk.Frame(peers_frame)
-        tree_frame.grid(row=0, column=0, sticky='nsew')
+        tree_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         tree_frame.columnconfigure(0, weight=1)
         tree_frame.rowconfigure(0, weight=1)
 
@@ -337,7 +366,7 @@ class BlockchainPeerUI:
 
         # Blockchain treeview
         tree_frame = ttk.Frame(blockchain_frame)
-        tree_frame.grid(row=0, column=0, sticky='nsew')
+        tree_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         tree_frame.columnconfigure(0, weight=1)
         tree_frame.rowconfigure(0, weight=1)
 
@@ -375,7 +404,7 @@ class BlockchainPeerUI:
         log_frame.rowconfigure(0, weight=1)
 
         self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD)
-        self.log_text.grid(row=0, column=0, sticky='nsew')
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
     def log_message(self, message: str):
         """Add message to log (thread-safe)"""
@@ -398,6 +427,10 @@ class BlockchainPeerUI:
 
                 elif msg_type == 'status':
                     self._update_status_displays()
+
+                elif msg_type == 'mine':
+                    # Auto-mining triggered from background thread
+                    self.mine_block()
 
         except Empty:
             pass
@@ -426,18 +459,42 @@ class BlockchainPeerUI:
         reserved = self.chain.allocation()
         self.reserved_label.config(text=str(len(reserved)))
 
+        # Mempool count
+        self.mempool_label.config(text=str(len(self.chain.mempool)))
+
+        # Balance
+        from blockchain.blockchain import serialize_pubkey
+        my_pubkey_hex = serialize_pubkey(self.pub_key)
+        balance = self.chain.get_balance(my_pubkey_hex)
+        self.balance_label.config(text=f"{balance:.1f}")
+
         # Update listboxes while preserving selections
-        # Save reserved selection
+        # Save reserved selection (extract item name from formatted display)
         reserved_selection = None
         if self.reserved_listbox.curselection():
             idx = self.reserved_listbox.curselection()[0]
-            reserved_selection = self.reserved_listbox.get(idx)
+            display_text = self.reserved_listbox.get(idx)
+            # Extract item name (before the demand info)
+            reserved_selection = display_text.split('[')[0].strip() if '[' in display_text else display_text.strip()
 
-        # Update reserved list
+        # Update reserved list with value, demand, and escrow info
         self.reserved_listbox.delete(0, tk.END)
         reserved_list = sorted(reserved)
+
         for item in reserved_list:
-            self.reserved_listbox.insert(tk.END, item)
+            demand_count = self.chain.item_demand_counters.get(item, 0)
+            current_value = self.chain.item_values.get(item, ITEM_REQUEST_COST)
+            escrow_amount = self.chain.item_escrow.get(item, 0.0)
+
+            # Format: "item_name  [Value: 11.5, Demand: 3, Escrow: 1.0]"
+            if demand_count == 0:
+                display = f"{item:<15} [Value: {current_value:.1f}]"
+            elif demand_count >= 5:
+                display = f"{item:<15} [Value: {current_value:.1f} 🔥{demand_count}, Escrow: {escrow_amount:.2f}]"
+            else:
+                display = f"{item:<15} [Value: {current_value:.1f}, Demand: {demand_count}, Escrow: {escrow_amount:.2f}]"
+
+            self.reserved_listbox.insert(tk.END, display)
 
         # Restore reserved selection
         if reserved_selection and reserved_selection in reserved_list:
@@ -533,6 +590,8 @@ class BlockchainPeerUI:
 
     def _update_blockchain_tree(self):
         """Update blockchain treeview while preserving state"""
+        from blockchain.blockchain import TxTypes, ITEM_REQUEST_COST
+
         # Save current state
         expanded_blocks = set()
         selected_items = set()
@@ -579,10 +638,29 @@ class BlockchainPeerUI:
 
             # Add transactions as children
             for tx in block.transactions:
-                tx_type = "REQUEST" if tx.tx_type == TxTypes.REQUEST else "RELEASE"
-                requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+                if tx.tx_type == TxTypes.COINBASE:
+                    tx_text = f"⛏️ COINBASE: +{tx.amount} credits"
+                    requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+                elif tx.tx_type == TxTypes.REQUEST:
+                    tx_text = f"REQUEST: {tx.uid} (-{ITEM_REQUEST_COST} credits)"
+                    requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+                elif tx.tx_type == TxTypes.RELEASE:
+                    refund_amount = tx.amount if tx.amount > 0 else (ITEM_REQUEST_COST * 0.5)
+                    tx_text = f"RELEASE: {tx.uid} (+{refund_amount:.1f} credits)"
+                    if hasattr(tx, 'accepted_offer') and tx.accepted_offer:
+                        tx_text += " 🤝"  # Buyout accepted
+                    requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+                elif tx.tx_type == TxTypes.TRANSFER:
+                    tx_text = f"TRANSFER: {tx.amount} credits"
+                    requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+                elif tx.tx_type == TxTypes.BUYOUT_OFFER:
+                    tx_text = f"💰 BUYOUT OFFER: {tx.uid} ({tx.amount} credits)"
+                    requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+                else:
+                    tx_text = f"UNKNOWN: {tx.uid}"
+                    requester_short = tx.requester[:16] + "..." if len(tx.requester) > 16 else tx.requester
+
                 tx_time = time.strftime("%H:%M:%S", time.localtime(tx.timestamp))
-                tx_text = f"{tx_type}: {tx.uid}"
 
                 self.blockchain_tree.insert(
                     block_id,
@@ -633,7 +711,9 @@ class BlockchainPeerUI:
         if not selection:
             return
 
-        uid = self.reserved_listbox.get(selection[0])
+        display_text = self.reserved_listbox.get(selection[0])
+        # Extract item name (before the demand info)
+        uid = display_text.split('[')[0].strip() if '[' in display_text else display_text.strip()
         self._add_to_batch("RELEASE", uid)
 
     def add_available_to_batch(self):
@@ -656,8 +736,38 @@ class BlockchainPeerUI:
         # Add to internal list
         self.batch_items.append((action, uid))
 
-        # Add to visual list
-        display_text = f"{action}: {uid}"
+        # Add to visual list with cost/refund info
+        if action == "RELEASE":
+            # Show current value (what holder gets back)
+            current_value = self.chain.item_values.get(uid, ITEM_REQUEST_COST)
+            escrow_amount = self.chain.item_escrow.get(uid, 0.0)
+            holder_share = escrow_amount * 0.6667
+            total_refund = current_value + holder_share
+            display_text = f"{action}: {uid} (+{total_refund:.2f} credits)"
+        else:  # REQUEST
+            # Check if item is reserved or available
+            cur = self.chain.allocation()
+            if uid not in cur:
+                # Regular request
+                display_text = f"{action}: {uid} (-{ITEM_REQUEST_COST} credits)"
+            else:
+                # Reserved - check buyout vs penalty
+                from blockchain.blockchain import serialize_pubkey, calculate_penalty_amount, \
+                    calculate_demand_percentage
+                my_pubkey_hex = serialize_pubkey(self.pub_key)
+                my_balance = self.chain.get_balance(my_pubkey_hex)
+                current_value = self.chain.item_values.get(uid, ITEM_REQUEST_COST)
+                demand_count = self.chain.item_demand_counters.get(uid, 0)
+
+                if my_balance >= current_value:
+                    # Buyout
+                    display_text = f"{action}: {uid} 🤝 BUYOUT (-{current_value:.2f} credits)"
+                else:
+                    # Penalty
+                    penalty = calculate_penalty_amount(current_value, demand_count)
+                    percentage = calculate_demand_percentage(demand_count)
+                    display_text = f"{action}: {uid} ⚠️ PENALTY (-{penalty:.2f} credits, {percentage * 100:.2f}%)"
+
         self.batch_listbox.insert(tk.END, display_text)
 
         count = len(self.batch_items)
@@ -705,52 +815,86 @@ class BlockchainPeerUI:
             self.execute_btn.config(text=f"Execute Batch ({count} items)", state=tk.NORMAL)
 
     def execute_batch(self):
-        """Execute batch operations - smart handling of single vs multiple"""
+        """Execute batch - broadcast transactions to network"""
         if len(self.batch_items) == 0:
             return
 
-        # Group by action type
-        requests = []
-        releases = []
+        from blockchain.blockchain import (serialize_pubkey, ITEM_REQUEST_COST,
+                                           calculate_penalty_amount, calculate_demand_percentage)
 
+        # Check balance before broadcasting
+        my_pubkey_hex = serialize_pubkey(self.pub_key)
+        current_balance = self.chain.get_balance(my_pubkey_hex)
+
+        # Calculate total cost (varies by item state)
+        total_cost = 0.0
+        for action, uid in self.batch_items:
+            if action == "REQUEST":
+                cur = self.chain.allocation()
+                if uid not in cur:
+                    # Regular request
+                    total_cost += ITEM_REQUEST_COST
+                else:
+                    # Reserved - check buyout vs penalty
+                    current_value = self.chain.item_values.get(uid, ITEM_REQUEST_COST)
+                    if current_balance >= current_value:
+                        # Buyout
+                        total_cost += current_value
+                    else:
+                        # Penalty
+                        demand_count = self.chain.item_demand_counters.get(uid, 0)
+                        penalty = calculate_penalty_amount(current_value, demand_count)
+                        total_cost += penalty
+
+        if total_cost > current_balance:
+            messagebox.showerror(
+                "Insufficient Credits",
+                f"Total cost: {total_cost:.2f} credits\n"
+                f"Your balance: {current_balance:.1f} credits\n\n"
+                f"You need {total_cost - current_balance:.2f} more credits.\n"
+                f"Mine blocks to earn credits!"
+            )
+            return
+
+        # Create and sign transactions
+        txs_to_broadcast = []
         for action, uid in self.batch_items:
             tx = Transaction(self.pub_key, uid, tx_type=TxTypes.REQUEST if action == "REQUEST" else TxTypes.RELEASE)
             tx.sign(self.priv_key)
+            txs_to_broadcast.append((action, uid, tx))
 
-            if action == "REQUEST":
-                requests.append((uid, tx))
-            else:
-                releases.append((uid, tx))
-
-        # Execute operations
+        # Add to our own mempool and broadcast
         try:
-            # Process requests
-            if requests:
-                txs = [tx for _, tx in requests]
-                self.chain.add_block(txs)
+            broadcast_count = 0
+            for action, uid, tx in txs_to_broadcast:
+                if self.chain.add_to_mempool(tx):
+                    # Broadcast to network
+                    self.p2p.announce_new_transaction(tx.to_full_dict())
+                    broadcast_count += 1
 
-                if len(requests) == 1:
-                    self.log_message(f"✅ Requested {requests[0][0]}")
+                    if action == "REQUEST":
+                        # Log type of request
+                        if tx.amount == ITEM_REQUEST_COST:
+                            self.log_message(f"📤 Broadcast REQUEST: {uid} (-{ITEM_REQUEST_COST} credits)")
+                        elif tx.amount > ITEM_REQUEST_COST:
+                            self.log_message(f"📤 Broadcast BUYOUT: {uid} 🤝 (-{tx.amount:.2f} credits)")
+                        else:
+                            percentage = calculate_demand_percentage(self.chain.item_demand_counters.get(uid, 0))
+                            self.log_message(
+                                f"📤 Broadcast PENALTY: {uid} ⚠️ (-{tx.amount:.2f} credits, {percentage * 100:.2f}%)")
+                    else:  # RELEASE
+                        current_value = self.chain.item_values.get(uid, ITEM_REQUEST_COST)
+                        escrow_amount = self.chain.item_escrow.get(uid, 0.0)
+                        holder_share = escrow_amount * 0.6667
+                        total_refund = current_value + holder_share
+                        self.log_message(
+                            f"📤 Broadcast RELEASE: {uid} (+{total_refund:.2f} credits: {current_value:.1f} value + {holder_share:.2f} escrow)")
                 else:
-                    items_str = ", ".join(uid for uid, _ in requests)
-                    self.log_message(f"✅ Requested {len(requests)} items: {items_str}")
+                    self.log_message(f"❌ Failed to add {uid} to mempool (invalid or duplicate)")
 
-                self.p2p.announce_new_block(self.chain.chain[-1].to_full_dict())
-                self.chain.snapshot(self.snap_path)
-
-            # Process releases
-            if releases:
-                txs = [tx for _, tx in releases]
-                self.chain.add_block(txs)
-
-                if len(releases) == 1:
-                    self.log_message(f"✅ Released {releases[0][0]}")
-                else:
-                    items_str = ", ".join(uid for uid, _ in releases)
-                    self.log_message(f"✅ Released {len(releases)} items: {items_str}")
-
-                self.p2p.announce_new_block(self.chain.chain[-1].to_full_dict())
-                self.chain.snapshot(self.snap_path)
+            if broadcast_count > 0:
+                self.log_message(
+                    f"✅ Broadcast {broadcast_count} transaction{'s' if broadcast_count != 1 else ''} to network")
 
             # Clear batch on success
             self.batch_items.clear()
@@ -758,9 +902,74 @@ class BlockchainPeerUI:
             self.update_execute_button()
             self.update_status()
 
-        except ValueError as e:
+        except Exception as e:
             self.log_message(f"❌ {e}")
             messagebox.showerror("Error", str(e))
+
+    def mine_block(self):
+        """Mine a block from mempool transactions"""
+        try:
+            mempool_size = len(self.chain.mempool)
+            self.log_message(
+                f"⛏️ Mining block with {mempool_size} pending transaction{'s' if mempool_size != 1 else ''}...")
+
+            from blockchain.blockchain import MINING_REWARD
+            block = self.chain.mine_block(self.pub_key)
+
+            if block:
+                tx_count = len(block.transactions) - 1  # Exclude coinbase
+                self.log_message(
+                    f"✅ Mined block #{block.index} with {tx_count} transaction{'s' if tx_count != 1 else ''}")
+
+                # Check for escrow fees
+                coinbase_tx = block.transactions[0]
+                escrow_fee = coinbase_tx.amount - MINING_REWARD
+                if escrow_fee > 0:
+                    self.log_message(
+                        f"💰 Mining reward: {MINING_REWARD} + {escrow_fee:.2f} escrow = {coinbase_tx.amount:.2f} credits")
+                else:
+                    self.log_message(f"💰 Mining reward: {MINING_REWARD} credits")
+
+                # Broadcast the new block
+                self.p2p.announce_new_block(block.to_full_dict())
+                self.chain.snapshot(self.snap_path)
+                self.update_status()
+            else:
+                self.log_message("❌ No valid transactions to mine")
+
+        except Exception as e:
+            self.log_message(f"❌ Mining failed: {e}")
+            messagebox.showerror("Mining Error", str(e))
+
+    def toggle_auto_mining(self):
+        """Toggle automatic mining on/off"""
+        if self.auto_mining_enabled.get():
+            # Start auto-mining
+            self.auto_mining_active = True
+            self.log_message("⚡ Auto-mining enabled - will mine when mempool has transactions")
+
+            def auto_mine_worker():
+                import time
+                while self.auto_mining_active:
+                    try:
+                        # Check if there are transactions to mine
+                        if len(self.chain.mempool) > 0:
+                            # Queue the mine operation to run on main thread
+                            self.message_queue.put(('mine', None))
+                            time.sleep(5)  # Wait 5 seconds after mining before checking again
+                        else:
+                            time.sleep(2)  # Check mempool every 2 seconds when empty
+                    except Exception as e:
+                        print(f"Auto-mining error: {e}")
+                        time.sleep(5)
+
+            # Start background thread
+            auto_mine_thread = threading.Thread(target=auto_mine_worker, daemon=True)
+            auto_mine_thread.start()
+        else:
+            # Stop auto-mining
+            self.auto_mining_active = False
+            self.log_message("⚡ Auto-mining disabled")
 
     def show_connect_dialog(self):
         """Show modal dialog for connecting to peer"""
@@ -851,6 +1060,31 @@ class BlockchainPeerUI:
     def _setup_network_callbacks(self):
         """Setup P2P network callbacks"""
 
+        def handle_new_transaction(tx_data: dict):
+            try:
+                from blockchain.blockchain import deserialize_pubkey
+
+                pub = deserialize_pubkey(tx_data['requester'])
+                tx = Transaction(
+                    pub,
+                    tx_data['uid'],
+                    tx_data['type'],
+                    tx_data.get('timestamp'),
+                    tx_data.get('signature'),
+                    tx_data.get('amount', 0.0),
+                    tx_data.get('recipient'),
+                    tx_data.get('accepted_offer')
+                )
+
+                if self.chain.add_to_mempool(tx):
+                    tx_type_str = {0: "COINBASE", 1: "REQUEST", 2: "RELEASE", 3: "TRANSFER", 4: "BUYOUT_OFFER"}.get(
+                        tx_data['type'], "UNKNOWN")
+                    self.log_message(f"📨 Received transaction: {tx_type_str} {tx_data['uid']}")
+                    self.update_status()
+
+            except Exception as e:
+                self.log_message(f"❌ Failed to process transaction: {e}")
+
         def handle_new_block(block_data: dict):
             try:
                 from blockchain.blockchain import Block, deserialize_pubkey
@@ -863,13 +1097,20 @@ class BlockchainPeerUI:
                         tx_dict['uid'],
                         tx_dict['type'],
                         tx_dict.get('timestamp'),
-                        tx_dict.get('signature')
+                        tx_dict.get('signature'),
+                        tx_dict.get('amount', 0.0),
+                        tx_dict.get('recipient'),
+                        tx_dict.get('accepted_offer')
                     )
                     txs.append(tx)
 
                 if len(self.chain.chain) == block_data['index']:
                     self.chain.add_block(txs)
                     self.log_message(f"📦 Received block #{block_data['index']}")
+
+                    # Clear these transactions from mempool
+                    self.chain.clear_mempool_transactions(txs)
+
                     self.chain.snapshot(self.snap_path)
                     self.update_status()
 
@@ -902,6 +1143,7 @@ class BlockchainPeerUI:
             except Exception as e:
                 self.log_message(f"❌ Error processing chain: {e}")
 
+        self.p2p.on_new_transaction = handle_new_transaction
         self.p2p.on_new_block = handle_new_block
         self.p2p.on_chain_request = handle_chain_request
         self.p2p.on_chain_response = handle_chain_response
@@ -950,6 +1192,9 @@ class BlockchainPeerUI:
         if hasattr(self, '_cleaning_up'):
             return
         self._cleaning_up = True
+
+        # Stop auto-mining
+        self.auto_mining_active = False
 
         self.chain.snapshot(self.snap_path)
         self.p2p.stop()
