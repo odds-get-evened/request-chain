@@ -84,6 +84,9 @@ class Peer:
             self.connected = False
 
 
+MAX_PEERS = 64  # Hard cap on simultaneous connections
+
+
 class P2PNetwork:
     def __init__(self, host: str = "0.0.0.0", port: int = 6000):
         self.host = host
@@ -120,6 +123,14 @@ class P2PNetwork:
         while self.running:
             try:
                 client_sock, addr = self.server_socket.accept()
+
+                # Enforce connection cap to prevent resource-exhaustion DoS
+                with self.peers_lock:
+                    if len(self.peers) >= MAX_PEERS:
+                        client_sock.close()
+                        print(f"⚠️  Rejected connection from {addr}: peer limit ({MAX_PEERS}) reached")
+                        continue
+
                 print(f"✅ Incoming connection from {addr}")
 
                 # Create peer and start handlers
@@ -134,16 +145,25 @@ class P2PNetwork:
                 if self.running:
                     print(f"❌ Accept error: {e}")
 
+    # Maximum buffered bytes per peer before the connection is dropped
+    _MAX_BUFFER = 4 * 1024 * 1024  # 4 MB
+
     def _handle_peer(self, peer: Peer):
         """Handle messages from a peer"""
         buffer = ""
         try:
             while self.running and peer.connected:
-                data = peer.socket.recv(4096).decode('utf-8')
+                data = peer.socket.recv(4096).decode('utf-8', errors='replace')
                 if not data:
                     break
 
                 buffer += data
+
+                # Drop peers that send oversized messages (DoS protection)
+                if len(buffer) > self._MAX_BUFFER:
+                    print(f"⚠️  Dropping peer {peer.address}: message buffer exceeded {self._MAX_BUFFER} bytes")
+                    break
+
                 # Process complete messages (newline-delimited)
                 while '\n' in buffer:
                     line, buffer = buffer.split('\n', 1)

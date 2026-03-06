@@ -24,13 +24,27 @@ class CryptKeeper:
         return serialization.load_pem_public_key(peer_public_bytes)
 
     def derive_shared_key(self, peer_public_key):
-        # Use ECDH to derive a shared secret, then use HKDF to get an AES key
+        # Use ECDH to derive a shared secret, then use HKDF to get an AES key.
+        # The salt is a SHA-256 digest of both public keys (sorted lexicographically)
+        # so that both parties independently arrive at the same salt without a
+        # separate round-trip, while still providing meaningful salt entropy.
         shared_secret = self.private_key.exchange(ec.ECDH(), peer_public_key)
+
+        own_pub_bytes = self.get_serialized_public_key()
+        peer_pub_bytes = peer_public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        # Sort so both sides produce the same salt regardless of who is "local"
+        ordered = sorted([own_pub_bytes, peer_pub_bytes])
+        from hashlib import sha256
+        salt = sha256(ordered[0] + ordered[1]).digest()
+
         derived_key = HKDF(
             algorithm=hashes.SHA256(),
-            length=32,  # 256 bits AES key
-            salt=None,
-            info=b'handshake data'
+            length=32,  # 256-bit AES key
+            salt=salt,
+            info=b'blockchain-p2p-handshake-v1',
         ).derive(shared_secret)
         return derived_key
 

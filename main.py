@@ -1,5 +1,4 @@
 import atexit
-import pickle
 import signal
 import sys
 import threading
@@ -24,7 +23,7 @@ class MenuItems(IntEnum):
     EXIT = 8
 
 
-snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
+snap_path = Path.home().joinpath('.databox', 'material', 'blx.json')
 snap_path.parent.mkdir(parents=True, exist_ok=True)
 
 status_q = Queue()
@@ -79,15 +78,11 @@ def main():
     priv_key = ec.generate_private_key(ec.SECP256R1())
     pub_key = priv_key.public_key()
 
-    # load pickle file if it exists
-    if snap_path.exists():
-        with open(snap_path, 'rb') as fh:
-            try:
-                chain = pickle.load(fh)
-            except Exception as e:
-                pass
-    else:
-        # establish a new chain
+    # load chain from JSON snapshot (or create fresh)
+    try:
+        chain = Blockchain.init(snap_path)
+    except ValueError as e:
+        print(f"Warning: could not load chain ({e}), starting fresh.")
         chain = Blockchain()
 
     # register for normal and forced exits
