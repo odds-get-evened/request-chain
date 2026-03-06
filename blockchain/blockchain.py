@@ -1,5 +1,4 @@
 import json
-import pickle
 import time
 from enum import IntEnum, StrEnum
 from hashlib import sha256
@@ -49,6 +48,29 @@ DEMAND_INCREMENT = 0.0001  # +0.01% per demand count (0.0001 as decimal)
 # Escrow distribution on release
 HOLDER_ESCROW_PERCENTAGE = 0.6667  # 66.67% to holder
 MINER_ESCROW_PERCENTAGE = 0.3333  # 33.33% to miner (service fee)
+
+# Input validation
+UID_MAX_LENGTH = 128
+UID_ALLOWED_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.')
+
+# System-generated signatures: maps signature string → allowed TxTypes only
+# These bypass cryptographic verification; each is restricted to one tx type to
+# prevent an attacker from forging arbitrary transactions with a magic string.
+_SYSTEM_SIGNATURES: dict[str, set] = {
+    "COINBASE": {TxTypes.COINBASE},
+    "GENESIS":  {TxTypes.COINBASE},
+    "BUYOUT_PAYMENT":       {TxTypes.TRANSFER},
+    "ESCROW_DISTRIBUTION":  {TxTypes.TRANSFER},
+}
+
+
+def validate_uid(uid: str) -> bool:
+    """Return True if uid is a safe, non-empty string within allowed length."""
+    if not uid or not isinstance(uid, str):
+        return False
+    if len(uid) > UID_MAX_LENGTH:
+        return False
+    return all(c in UID_ALLOWED_CHARS for c in uid)
 
 
 def serialize_pubkey(pubkey: ec.EllipticCurvePublicKey) -> str:
@@ -159,22 +181,25 @@ class Transaction:
         self.signature = sig.hex()
 
     def verify(self):
-        # COINBASE transactions and system-generated transfers don't need signature verification
+        # COINBASE transactions don't carry a user signature
         if self.tx_type == TxTypes.COINBASE:
             return True
 
-        # System-generated transactions (BUYOUT_PAYMENT, ESCROW_DISTRIBUTION, etc.)
-        if self.signature in ["COINBASE", "BUYOUT_PAYMENT", "ESCROW_DISTRIBUTION", "GENESIS"]:
-            return True
+        # System-generated transactions: the magic signature is only accepted when
+        # the tx_type matches the exact type that the system is allowed to produce
+        # with that signature.  This prevents an attacker from forging, e.g., a
+        # TRANSFER with signature="BUYOUT_PAYMENT" to skip real verification.
+        allowed_types = _SYSTEM_SIGNATURES.get(self.signature)
+        if allowed_types is not None:
+            return self.tx_type in allowed_types
 
-        # Verify only immutable fields (amount is set after signing)
-        pubk = deserialize_pubkey(self.requester)
-        d = json.dumps(self.to_signable_dict(), sort_keys=True).encode()
+        # All other transactions require a real ECDSA signature over the immutable fields.
         try:
+            pubk = deserialize_pubkey(self.requester)
+            d = json.dumps(self.to_signable_dict(), sort_keys=True).encode()
             pubk.verify(bytes.fromhex(self.signature), d, ec.ECDSA(hashes.SHA256()))
-
             return True
-        except InvalidSignature:
+        except (InvalidSignature, ValueError):
             return False
 
     def __str__(self):
@@ -218,6 +243,10 @@ class Block:
 
     def hash_ok(self) -> bool:
         return self.hash == self.compute_hash()
+
+    def pow_ok(self, difficulty: int) -> bool:
+        """Check that the stored hash satisfies the proof-of-work target."""
+        return bool(self.hash) and self.hash.startswith(BIT_OP * difficulty)
 
     def signatures_ok(self):
         for tx in self.transactions:
@@ -418,6 +447,17 @@ class Blockchain:
         """
         # COINBASE transactions can only be created during mining
         if tx.tx_type == TxTypes.COINBASE:
+            return False
+
+        # Reject externally-submitted transactions that carry a system-generated
+        # signature.  These signatures (COINBASE, BUYOUT_PAYMENT, etc.) are only
+        # ever written by internal mining logic; accepting them from the mempool
+        # would allow an attacker to forge system transactions.
+        if tx.signature in _SYSTEM_SIGNATURES:
+            return False
+
+        # Validate UID format before processing
+        if not validate_uid(tx.uid):
             return False
 
         # Verify signature
@@ -925,32 +965,48 @@ class Blockchain:
         self._rebuild_item_tracking()
 
     def snapshot(self, p: Path):
-        with open(p, 'wb') as fh:
-            pickle.dump(self, fh, pickle.HIGHEST_PROTOCOL)
+        """Persist the chain to disk as JSON (safe alternative to pickle)."""
+        data = {
+            'version': 1,
+            'difficulty': self.difficulty,
+            'chain': [b.to_full_dict() for b in self.chain],
+        }
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Write to a temp file then atomically rename to avoid partial writes
+        tmp = p.with_suffix('.tmp')
+        with open(tmp, 'w') as fh:
+            json.dump(data, fh)
+        tmp.replace(p)
 
     def integrity_check(self) -> bool:
         """
         walks the chain and ensures:
             - each block's stored hash matches the computed_hash()
             - prev_hash links correctly
-            - all transactions signatures verify.
+            - all transactions signatures verify
+            - non-genesis blocks satisfy proof-of-work
+            - block timestamps are monotonically increasing
         :return: success/failure
         """
+        prev_timestamp: float | None = None
         for i, blk in enumerate(self.chain):
             # 1. check block hash
             if not blk.hash_ok():
-                # print(f"there is problem computing hash for block [{i}]")
                 return False
             # 2. check block linkage to previous block (skipping genesis block)
             if not self.linkage_ok(i, blk):
-                # print(f"there is broken link in block [{i}]")
                 return False
             # 3. check each transaction signature
             if not blk.signatures_ok():
-                # print(f"there is a transaction with an invalid signature in block [{i}]")
                 return False
+            # 4. non-genesis blocks must satisfy proof-of-work
+            if i > 0 and not blk.pow_ok(self.difficulty):
+                return False
+            # 5. timestamps must be monotonically non-decreasing
+            if prev_timestamp is not None and blk.timestamp < prev_timestamp:
+                return False
+            prev_timestamp = blk.timestamp
 
-        # print("no corruption in blockchain")
         return True
 
     def linkage_ok(self, cur_idx: int, cur_blk: Block):
@@ -964,21 +1020,22 @@ class Blockchain:
     def find_bad_block(self) -> int | None:
         """
         returns the index of the first block whose
-        hash/linkage/signatures don't check out.
+        hash/linkage/signatures/pow/timestamps don't check out.
         :return:
         """
+        prev_timestamp: float | None = None
         for i, blk in enumerate(self.chain):
-            # found a hash mismatch
             if not blk.hash_ok():
                 return i
-
-            # found a bad linkage
             if not self.linkage_ok(i, blk):
                 return i
-
-            # found a bad transaction signature
             if not blk.signatures_ok():
                 return i
+            if i > 0 and not blk.pow_ok(self.difficulty):
+                return i
+            if prev_timestamp is not None and blk.timestamp < prev_timestamp:
+                return i
+            prev_timestamp = blk.timestamp
 
         return None
 
@@ -1047,10 +1104,12 @@ class Blockchain:
                 blk.hash = blk_dict.get('hash')
                 temp_blockchain.chain.append(blk)
 
-            # Validate the new chain
+            # Validate the new chain using our own difficulty (don't trust peer's)
+            temp_blockchain.difficulty = self.difficulty
             if temp_blockchain.integrity_check():
                 self.chain = temp_blockchain.chain
-                self.difficulty = temp_blockchain.difficulty
+                # NOTE: difficulty intentionally NOT replaced from peer to prevent
+                # a peer from sending a chain with difficulty=0 to trivialise mining.
                 return True
 
         except Exception as e:
@@ -1062,16 +1121,49 @@ class Blockchain:
         return "\n".join([json.dumps(b.to_dict(), sort_keys=True) for b in self.chain])
 
     @staticmethod
-    def init(p: Path, difficulty: int = 2):
-        # load pickle file if it exists
-        if p.exists():
-            with open(p, 'rb') as fh:
-                try:
-                    chain = pickle.load(fh)
-                except Exception as e:
-                    raise FileExistsError(f"{str(p)} does not exist. {str(e)}")
-        else:
-            # establish a new chain
-            chain = Blockchain(difficulty=difficulty)
+    def init(p: Path, difficulty: int = 2) -> 'Blockchain':
+        """Load chain from a JSON snapshot, or create a fresh one."""
+        if not p.exists():
+            return Blockchain(difficulty=difficulty)
 
+        try:
+            with open(p, 'r') as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError) as e:
+            raise ValueError(f"Cannot load chain from {p}: {e}")
+
+        saved_difficulty = data.get('difficulty', difficulty)
+        chain = Blockchain(difficulty=saved_difficulty)
+        chain.chain = []
+
+        for blk_dict in data.get('chain', []):
+            txs = []
+            for tx_dict in blk_dict.get('transactions', []):
+                try:
+                    pub = deserialize_pubkey(tx_dict['requester'])
+                except (ValueError, KeyError) as e:
+                    raise ValueError(f"Invalid public key in saved chain: {e}")
+                tx = Transaction(
+                    pub,
+                    tx_dict['uid'],
+                    tx_dict['type'],
+                    tx_dict.get('timestamp'),
+                    tx_dict.get('signature'),
+                    tx_dict.get('amount', 0.0),
+                    tx_dict.get('recipient'),
+                    tx_dict.get('accepted_offer'),
+                )
+                txs.append(tx)
+
+            blk = Block(
+                blk_dict['index'],
+                blk_dict['prev_hash'],
+                txs,
+                blk_dict.get('nonce', 0),
+                blk_dict.get('timestamp'),
+            )
+            blk.hash = blk_dict.get('hash')
+            chain.chain.append(blk)
+
+        chain._rebuild_item_tracking()
         return chain

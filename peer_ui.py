@@ -1,5 +1,4 @@
 import atexit
-import pickle
 import signal
 import sys
 import threading
@@ -23,7 +22,7 @@ class BlockchainPeerUI:
         self.root.geometry("900x700")
 
         # Blockchain setup
-        self.snap_path = Path.home().joinpath('.databox', 'material', 'blx.pkl')
+        self.snap_path = Path.home().joinpath('.databox', 'material', 'blx.json')
         self.snap_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.priv_key = ec.generate_private_key(ec.SECP256R1())
@@ -66,15 +65,12 @@ class BlockchainPeerUI:
         self._process_messages()
 
     def _load_chain(self):
-        """Load blockchain from disk or create new"""
-        if self.snap_path.exists():
-            with open(self.snap_path, 'rb') as fh:
-                try:
-                    return pickle.load(fh)
-                except Exception as e:
-                    self.log_message(f"Failed to load chain: {e}")
-                    return Blockchain()
-        return Blockchain()
+        """Load blockchain from JSON snapshot or create new"""
+        try:
+            return Blockchain.init(self.snap_path)
+        except ValueError as e:
+            self.log_message(f"Failed to load chain: {e}, starting fresh.")
+            return Blockchain()
 
     def _create_ui(self):
         """Create the UI layout"""

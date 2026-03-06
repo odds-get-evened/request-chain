@@ -16,7 +16,7 @@ import blockchain  # local module from blockchain.py
 
 # application paths and globals
 APP_DIR = Path(__file__).parent
-CHAIN_PATH = Path.home().joinpath('.databox', 'material', 'blx.pkl')
+CHAIN_PATH = Path.home().joinpath('.databox', 'material', 'blx.json')
 
 app = Flask(__name__, static_folder=str(APP_DIR / "static"), template_folder=str(APP_DIR / "templates"))
 
@@ -133,6 +133,9 @@ def api_create_tx():
 
     if not pem or not uid:
         return jsonify({"error": "privkey_pem and uid are required"}), 400
+
+    if not blockchain.validate_uid(uid):
+        return jsonify({"error": "uid contains invalid characters or is too long"}), 400
 
     try:
         priv = serialization.load_pem_private_key(pem.encode(), password=None)
@@ -318,4 +321,4 @@ def stream():
 
 if __name__ == "__main__":
     # Run the Flask dev server (sufficient for demo). For production, use a WSGI server that supports long-lived responses.
-    app.run(debug=True, threaded=True, host="127.0.0.1", port=5000)
+    app.run(debug=False, threaded=True, host="127.0.0.1", port=5000)
