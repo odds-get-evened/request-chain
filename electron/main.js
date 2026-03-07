@@ -17,8 +17,9 @@ let isDev = process.argv.includes('--dev');
 
 // ── Spawn Python backend ──────────────────────────────────────────────────────
 function spawnBackend() {
-  console.log(`Spawning backend: python3 ${BACKEND_SCRIPT} ${P2P_PORT}`);
-  pythonProcess = spawn('python3', [BACKEND_SCRIPT, String(P2P_PORT)], {
+  const pythonExe = process.platform === 'win32' ? 'python' : 'python3';
+  console.log(`Spawning backend: ${pythonExe} ${BACKEND_SCRIPT} ${P2P_PORT}`);
+  pythonProcess = spawn(pythonExe, [BACKEND_SCRIPT, String(P2P_PORT)], {
     cwd: path.join(__dirname, '..'),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
