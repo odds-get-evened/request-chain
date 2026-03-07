@@ -712,6 +712,13 @@ function startStream() {
 // Wire up all UI events
 // ─────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Set window title with P2P port
+  if (window.electronAPI?.getP2PPort) {
+    window.electronAPI.getP2PPort().then(port => {
+      document.title = `Request Chain — Port ${port}`;
+    });
+  }
+
   // Prevent double init
   initCharts();
 
