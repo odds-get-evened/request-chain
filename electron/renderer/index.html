@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Request Chain</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Top status bar ──────────────────────────────────────────────────── -->
+  <header class="status-bar">
+    <div class="status-bar__left">
+      <span class="status-bar__logo">⛓ REQUEST CHAIN</span>
+      <span class="status-pill" id="sb-port">P2P: —</span>
+    </div>
+    <div class="status-bar__center">
+      <div class="status-item">
+        <span class="status-item__label">BLOCKS</span>
+        <span class="status-item__value" id="sb-blocks">0</span>
+      </div>
+      <div class="status-item">
+        <span class="status-item__label">PEERS</span>
+        <span class="status-item__value" id="sb-peers">0</span>
+      </div>
+      <div class="status-item">
+        <span class="status-item__label">MEMPOOL</span>
+        <span class="status-item__value" id="sb-mempool">0</span>
+      </div>
+      <div class="status-item">
+        <span class="status-item__label">INTEGRITY</span>
+        <span class="status-item__value status-ok" id="sb-integrity">OK</span>
+      </div>
+      <div class="status-item">
+        <span class="status-item__label">BALANCE</span>
+        <span class="status-item__value status-balance" id="sb-balance">0</span>
+      </div>
+    </div>
+    <div class="status-bar__right">
+      <canvas id="balance-sparkline" width="120" height="32"></canvas>
+      <span class="status-pill status-pill--dim" id="sb-pubkey" title="">—</span>
+    </div>
+  </header>
+
+  <!-- ── Main layout ─────────────────────────────────────────────────────── -->
+  <div class="layout">
+
+    <!-- Left panel: actions + batch ─────────────────────────────────────── -->
+    <aside class="panel panel--left">
+
+      <!-- Node info card -->
+      <div class="card">
+        <div class="card__title">NODE</div>
+        <div class="node-info">
+          <div class="node-info__row">
+            <span class="node-info__label">Key</span>
+            <span class="node-info__value mono" id="ni-pubkey">—</span>
+          </div>
+          <div class="node-info__row">
+            <span class="node-info__label">P2P Port</span>
+            <span class="node-info__value mono" id="ni-port">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Peers card -->
+      <div class="card">
+        <div class="card__title">
+          PEERS
+          <div class="card__actions">
+            <button class="btn btn--sm" id="btn-connect-peer">+ Connect</button>
+            <button class="btn btn--sm btn--dim" id="btn-sync-chain">Sync</button>
+          </div>
+        </div>
+        <div id="peer-list" class="peer-list">
+          <div class="empty-state">No peers connected</div>
+        </div>
+      </div>
+
+      <!-- Mining card -->
+      <div class="card">
+        <div class="card__title">MINING</div>
+        <div class="mining-controls">
+          <button class="btn btn--primary btn--full" id="btn-mine">⛏ Mine Block</button>
+          <div class="mining-spinner hidden" id="mining-spinner">
+            <span class="spinner"></span> Mining…
+          </div>
+          <label class="toggle-row">
+            <span>Auto-mine</span>
+            <input type="checkbox" id="chk-auto-mine" />
+            <span class="toggle-switch"></span>
+          </label>
+          <div class="mining-reward-hint" id="mining-reward-hint">Reward: 50 credits</div>
+        </div>
+      </div>
+
+      <!-- Batch operations card -->
+      <div class="card card--grow">
+        <div class="card__title">BATCH OPERATIONS</div>
+
+        <div class="batch-add">
+          <input type="text" class="input" id="batch-uid" placeholder="Item ID" />
+          <div class="batch-add__row">
+            <select class="select" id="batch-action">
+              <option value="REQUEST">REQUEST</option>
+              <option value="RELEASE">RELEASE</option>
+            </select>
+            <button class="btn btn--accent" id="btn-batch-add">Add</button>
+          </div>
+        </div>
+
+        <!-- Cost preview -->
+        <div id="batch-preview" class="batch-preview hidden"></div>
+
+        <!-- Queue -->
+        <div class="batch-queue" id="batch-queue">
+          <div class="empty-state">Batch is empty</div>
+        </div>
+
+        <div class="batch-footer">
+          <button class="btn btn--dim btn--sm" id="btn-batch-clear">Clear</button>
+          <button class="btn btn--primary btn--full" id="btn-execute" disabled>Execute Batch</button>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Center panel: tabs ───────────────────────────────────────────────── -->
+    <main class="panel panel--center">
+
+      <div class="tabs">
+        <button class="tab tab--active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="chain">Chain</button>
+        <button class="tab" data-tab="analytics">Analytics</button>
+        <button class="tab" data-tab="devtools">Dev Tools</button>
+      </div>
+
+      <!-- Overview tab -->
+      <div class="tab-content tab-content--active" id="tab-overview">
+        <div class="overview-grid">
+
+          <!-- Heat map -->
+          <div class="card card--full">
+            <div class="card__title">
+              ITEM DEMAND HEAT MAP
+              <span class="card__hint">click item to add to batch</span>
+            </div>
+            <div class="heatmap-legend">
+              <span class="legend-label">Low demand</span>
+              <div class="legend-gradient"></div>
+              <span class="legend-label">High demand</span>
+            </div>
+            <div id="heatmap" class="heatmap"></div>
+            <div class="empty-state hidden" id="heatmap-empty">No items on chain yet</div>
+          </div>
+
+          <!-- Charts row -->
+          <div class="charts-row">
+            <div class="card">
+              <div class="card__title">TX TYPE DISTRIBUTION</div>
+              <div class="chart-wrap chart-wrap--sm">
+                <canvas id="donut-chart"></canvas>
+              </div>
+            </div>
+            <div class="card card--grow">
+              <div class="card__title">CHAIN GROWTH</div>
+              <div class="chart-wrap">
+                <canvas id="growth-chart"></canvas>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Chain tab -->
+      <div class="tab-content" id="tab-chain">
+        <div class="card card--full card--grow">
+          <div class="card__title">
+            BLOCKCHAIN
+            <span class="card__hint">newest first</span>
+          </div>
+          <div id="block-rail" class="block-rail"></div>
+        </div>
+      </div>
+
+      <!-- Analytics tab -->
+      <div class="tab-content" id="tab-analytics">
+        <div class="analytics-grid">
+          <div class="card card--full">
+            <div class="card__title">TRANSACTIONS PER BLOCK</div>
+            <div class="chart-wrap">
+              <canvas id="txs-chart"></canvas>
+            </div>
+          </div>
+          <div class="card card--full">
+            <div class="card__title">ITEM ALLOCATION</div>
+            <div class="chart-wrap chart-wrap--sm">
+              <canvas id="alloc-chart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dev tools tab -->
+      <div class="tab-content" id="tab-devtools">
+        <div class="card">
+          <div class="card__title">CHAIN INTEGRITY</div>
+          <div class="devtools-row">
+            <button class="btn btn--warn" id="btn-repair">Repair Chain</button>
+            <button class="btn btn--dim" id="btn-save">Save to Disk</button>
+            <button class="btn btn--dim" id="btn-load">Load from Disk</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card__title">CORRUPT BLOCK (demo)</div>
+          <div class="devtools-form">
+            <input type="number" class="input" id="corrupt-index" placeholder="Block index" min="1" />
+            <select class="select" id="corrupt-field">
+              <option value="nonce">nonce</option>
+              <option value="prev_hash">prev_hash</option>
+              <option value="timestamp">timestamp</option>
+            </select>
+            <input type="text" class="input" id="corrupt-value" placeholder="New value" />
+            <button class="btn btn--danger" id="btn-corrupt">Corrupt</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card__title">MEMPOOL</div>
+          <div class="devtools-row">
+            <button class="btn btn--warn" id="btn-clear-pool">Clear Mempool</button>
+          </div>
+          <div id="pool-list" class="pool-list"></div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Right panel: activity log ───────────────────────────────────────── -->
+    <aside class="panel panel--right">
+      <div class="card card--grow card--full">
+        <div class="card__title">
+          ACTIVITY LOG
+          <button class="btn btn--sm btn--dim" id="btn-clear-log">Clear</button>
+        </div>
+        <div class="log-filters">
+          <button class="log-filter log-filter--active" data-type="block">Blocks</button>
+          <button class="log-filter log-filter--active" data-type="tx">Txs</button>
+          <button class="log-filter log-filter--active" data-type="network">Network</button>
+          <button class="log-filter log-filter--active" data-type="system">System</button>
+        </div>
+        <ul id="activity-log" class="activity-log"></ul>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- ── Item detail slide-in panel ─────────────────────────────────────── -->
+  <div id="item-detail-panel" class="item-detail-panel hidden">
+    <div class="item-detail-panel__header">
+      <span id="item-detail-uid" class="item-detail-panel__uid"></span>
+      <button class="btn btn--sm btn--dim" id="item-detail-close">✕</button>
+    </div>
+    <div class="item-detail-panel__stats">
+      <div class="detail-stat">
+        <span class="detail-stat__label">Value</span>
+        <span class="detail-stat__value" id="detail-value">—</span>
+      </div>
+      <div class="detail-stat">
+        <span class="detail-stat__label">Demand</span>
+        <span class="detail-stat__value" id="detail-demand">—</span>
+      </div>
+      <div class="detail-stat">
+        <span class="detail-stat__label">Escrow</span>
+        <span class="detail-stat__value" id="detail-escrow">—</span>
+      </div>
+      <div class="detail-stat">
+        <span class="detail-stat__label">Holder</span>
+        <span class="detail-stat__value mono" id="detail-holder">—</span>
+      </div>
+    </div>
+    <div class="card__title" style="margin-top:12px">TRANSACTION HISTORY</div>
+    <div id="item-detail-timeline" class="item-detail-timeline"></div>
+    <div class="item-detail-panel__actions">
+      <button class="btn btn--accent btn--full" id="detail-btn-add">Add to Batch</button>
+    </div>
+  </div>
+
+  <!-- ── Connect peer modal ──────────────────────────────────────────────── -->
+  <div id="connect-modal" class="modal hidden">
+    <div class="modal__box">
+      <div class="modal__title">Connect to Peer</div>
+      <label class="form-label">Host</label>
+      <input type="text" class="input" id="peer-host" value="localhost" />
+      <label class="form-label">Port</label>
+      <input type="number" class="input" id="peer-port" value="6001" min="1024" max="65535" />
+      <div class="modal__actions">
+        <button class="btn btn--dim" id="modal-cancel">Cancel</button>
+        <button class="btn btn--primary" id="modal-connect">Connect</button>
+      </div>
+    </div>
+  </div>
+  <div id="modal-backdrop" class="modal-backdrop hidden"></div>
+
+  <!-- Chart.js and D3.js from CDN (can be vendored for offline use) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

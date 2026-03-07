@@ -1,0 +1,13 @@
+{
+  "name": "request-chain",
+  "version": "1.0.0",
+  "description": "Blockchain peer desktop application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "electron": "^30.0.0"
+  }
+}
