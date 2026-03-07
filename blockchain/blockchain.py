@@ -427,7 +427,7 @@ class Blockchain:
             for tx in blk.transactions:
                 seen.add(tx.uid)
 
-        return seen - self.allocation()
+        return seen - self.allocation().keys()
 
     def proof_of_work(self, block: Block):
         tgt = BIT_OP * self.difficulty
