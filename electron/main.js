@@ -42,6 +42,7 @@ function spawnBackend() {
   pythonProcess = spawn(pythonExe, [BACKEND_SCRIPT, String(P2P_PORT)], {
     cwd: path.join(__dirname, '..'),
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONUTF8: '1' },
   });
 
   pythonProcess.stdout.on('data', (data) => {
