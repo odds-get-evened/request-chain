@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const path = require('path');
 const http = require('http');
 
@@ -15,9 +15,29 @@ let mainWindow = null;
 let pythonProcess = null;
 let isDev = process.argv.includes('--dev');
 
+// ── Detect Python executable ──────────────────────────────────────────────────
+// On Windows, 'python' may be intercepted by the App Execution Alias and open
+// the Microsoft Store instead of running Python (exit code 9009).
+// Try candidates in order: 'py' (Windows Launcher, lives in System32) is the
+// most reliable on Windows; fall back to 'python3' then 'python'.
+function findPythonExe() {
+  const candidates = process.platform === 'win32'
+    ? ['py', 'python3', 'python']
+    : ['python3', 'python'];
+  for (const exe of candidates) {
+    try {
+      execFileSync(exe, ['--version'], { timeout: 3000, stdio: 'pipe' });
+      return exe;
+    } catch (_) {
+      // not found or not runnable — try next candidate
+    }
+  }
+  return candidates[candidates.length - 1]; // last-resort fallback
+}
+
 // ── Spawn Python backend ──────────────────────────────────────────────────────
 function spawnBackend() {
-  const pythonExe = process.platform === 'win32' ? 'python' : 'python3';
+  const pythonExe = findPythonExe();
   console.log(`Spawning backend: ${pythonExe} ${BACKEND_SCRIPT} ${P2P_PORT}`);
   pythonProcess = spawn(pythonExe, [BACKEND_SCRIPT, String(P2P_PORT)], {
     cwd: path.join(__dirname, '..'),
