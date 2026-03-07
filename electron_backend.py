@@ -17,7 +17,7 @@ import threading
 import queue
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, request, Response, stream_with_context, send_from_directory
@@ -143,7 +143,7 @@ def _build_broadcast_payload() -> dict:
     txs_per_block = [len(b["transactions"]) for b in blocks]
     block_indexes = [b["index"] for b in blocks]
     block_time_labels = [
-        datetime.utcfromtimestamp(float(b["timestamp"])).isoformat() + "Z"
+        datetime.fromtimestamp(float(b["timestamp"]), tz=timezone.utc).isoformat()
         for b in blocks
     ]
     allocated = chain.allocation()

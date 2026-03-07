@@ -406,7 +406,7 @@ class Blockchain:
         return balance
 
     def allocation(self):
-        allocated = set()
+        allocated = {}
 
         for blk in self.chain:
             for tx in blk.transactions:
@@ -414,9 +414,9 @@ class Blockchain:
                     # Only regular requests (10) and buyouts (>10) add to allocation
                     # Penalties (<10) don't change allocation
                     if tx.amount >= ITEM_REQUEST_COST:
-                        allocated.add(tx.uid)
+                        allocated[tx.uid] = tx.requester
                 elif tx.tx_type == TxTypes.RELEASE:
-                    allocated.discard(tx.uid)
+                    allocated.pop(tx.uid, None)
 
         return allocated
 
