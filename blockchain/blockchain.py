@@ -45,9 +45,9 @@ GENESIS_CREDITS = 100.0  # Starting credits for genesis block
 BASE_DEMAND_PERCENTAGE = 0.05  # 5% base increase per failed attempt
 DEMAND_INCREMENT = 0.0001  # +0.01% per demand count (0.0001 as decimal)
 
-# Escrow distribution on release
-HOLDER_ESCROW_PERCENTAGE = 0.6667  # 66.67% to holder
-MINER_ESCROW_PERCENTAGE = 0.3333  # 33.33% to miner (service fee)
+# Escrow distribution on release (use exact fractions so they sum to exactly 1.0)
+HOLDER_ESCROW_PERCENTAGE = 2 / 3  # 66.666...% to holder
+MINER_ESCROW_PERCENTAGE = 1 - HOLDER_ESCROW_PERCENTAGE  # 33.333...% to miner (service fee)
 
 # Input validation
 UID_MAX_LENGTH = 128
@@ -136,13 +136,23 @@ class Transaction:
         self.accepted_offer = accepted_offer  # For RELEASE transactions accepting a buyout (offer tx hash)
 
     def to_signable_dict(self):
-        """Return dict with only immutable fields for signing (excludes amount set after signing)"""
-        return {
+        """Return dict with immutable fields for signing.
+        TRANSFER transactions include amount and recipient so relay nodes cannot
+        alter payment details after the sender signs (VULN-3).  REQUEST/RELEASE
+        amounts are set by the node after admission, so they are intentionally
+        excluded here; the node enforces the correct amount independently.
+        """
+        d = {
             TxKeys.REQUESTER: self.requester,
             TxKeys.UID: self.uid,
             TxKeys.TYPE: self.tx_type,
             TxKeys.TIMESTAMP: self.timestamp
         }
+        if self.tx_type == TxTypes.TRANSFER:
+            d['amount'] = self.amount
+            if self.recipient:
+                d['recipient'] = self.recipient
+        return d
 
     def to_dict(self):
         d = {
@@ -259,8 +269,13 @@ class Block:
         return json.dumps(self.to_dict(), sort_keys=True)
 
 
+MEMPOOL_MAX_SIZE = 10_000  # Hard cap on pending transactions (VULN-7)
+MAX_PENDING_PER_REQUESTER = 100  # Per-requester cap to prevent spam (VULN-12)
+MAX_FUTURE_TIMESTAMP_SECS = 7200  # 2 hours; blocks dated further ahead are rejected (VULN-13)
+
+
 class Blockchain:
-    def __init__(self, difficulty: int = 2):
+    def __init__(self, difficulty: int = 4):
         self.chain: list[Block] = []
         self.difficulty: int = difficulty
         self.mempool: list[Transaction] = []  # Pending transactions
@@ -464,6 +479,15 @@ class Blockchain:
         if not tx.verify():
             return False
 
+        # Hard cap on total mempool size to prevent memory exhaustion (VULN-7)
+        if len(self.mempool) >= MEMPOOL_MAX_SIZE:
+            return False
+
+        # Per-requester cap to prevent spam flooding (VULN-12)
+        pending_count = sum(1 for t in self.mempool if t.requester == tx.requester)
+        if pending_count >= MAX_PENDING_PER_REQUESTER:
+            return False
+
         # Check for duplicate in mempool (except BUYOUT_OFFER which allows multiples)
         for existing_tx in self.mempool:
             if existing_tx.uid == tx.uid and existing_tx.tx_type == tx.tx_type:
@@ -480,13 +504,13 @@ class Blockchain:
             if mem_tx.tx_type == TxTypes.TRANSFER and mem_tx.recipient == tx.requester:
                 requester_balance += mem_tx.amount
 
-        # Get current allocation
+        # Get current allocation (uid -> requester dict); update with pending mempool (VULN-4)
         cur = self.allocation()
         for mem_tx in self.mempool:
             if mem_tx.tx_type == TxTypes.REQUEST and mem_tx.amount >= ITEM_REQUEST_COST:
-                cur.add(mem_tx.uid)  # Regular request or buyout
+                cur[mem_tx.uid] = mem_tx.requester  # Regular request or buyout
             elif mem_tx.tx_type == TxTypes.RELEASE:
-                cur.discard(mem_tx.uid)
+                cur.pop(mem_tx.uid, None)
 
         # Handle REQUEST transactions (3 types: regular, buyout, penalty)
         if tx.tx_type == TxTypes.REQUEST:
@@ -514,6 +538,9 @@ class Blockchain:
         # Handle RELEASE transactions
         elif tx.tx_type == TxTypes.RELEASE:
             if tx.uid not in cur:
+                return False
+            # Only the current holder may release the item (VULN-1)
+            if cur[tx.uid] != tx.requester:
                 return False
             # Amount = current value (holder gets this back on release)
             tx.amount = self.item_values.get(tx.uid, ITEM_REQUEST_COST)
@@ -588,7 +615,7 @@ class Blockchain:
                     # REGULAR REQUEST: Item available
                     if balances[requester] >= ITEM_REQUEST_COST and tx.amount == ITEM_REQUEST_COST:
                         valid_txs.append(tx)
-                        cur.add(tx.uid)
+                        cur[tx.uid] = requester  # dict, not set (VULN-4)
                         balances[requester] -= ITEM_REQUEST_COST
                         item_holders[tx.uid] = requester
                 else:
@@ -640,7 +667,7 @@ class Blockchain:
 
                             # Buyer gets the item (add their request)
                             valid_txs.append(tx)
-                            cur.add(tx.uid)  # Actually already in cur, but resetting holder
+                            cur[tx.uid] = requester  # update holder in dict (VULN-4)
                             item_holders[tx.uid] = requester
                     else:
                         # PENALTY: Can't afford, pay penalty
@@ -652,9 +679,10 @@ class Blockchain:
 
             # Handle RELEASE transactions
             elif tx.tx_type == TxTypes.RELEASE:
-                if tx.uid in cur:
+                # Only the current holder may release the item (VULN-1)
+                if tx.uid in cur and cur.get(tx.uid) == requester:
                     valid_txs.append(tx)
-                    cur.remove(tx.uid)
+                    cur.pop(tx.uid, None)  # dict, not set (VULN-4)
 
                     # Holder gets current value back
                     balances[requester] += tx.amount
@@ -932,7 +960,7 @@ class Blockchain:
                     if tx.uid in cur and tx.amount == ITEM_REQUEST_COST:
                         # This is a regular request but item already reserved - error
                         raise ValueError(f"item {tx.uid} is already reserved (cannot regular request).")
-                    cur.add(tx.uid)
+                    cur[tx.uid] = requester  # dict, not set (VULN-4)
                 # Penalty requests (amount < ITEM_REQUEST_COST) don't change cur
 
                 balances[requester] -= tx.amount
@@ -940,7 +968,10 @@ class Blockchain:
             elif tx.tx_type == TxTypes.RELEASE:
                 if tx.uid not in cur:
                     raise ValueError(f"item {tx.uid} is ready for request.")
-                cur.remove(tx.uid)
+                # Verify the requester owns the item (VULN-1)
+                if cur[tx.uid] != requester:
+                    raise ValueError(f"requester does not own item {tx.uid}.")
+                cur.pop(tx.uid, None)  # dict, not set (VULN-4)
                 # Use the amount from the transaction (includes current value + escrow share)
                 balances[requester] += tx.amount
 
@@ -986,8 +1017,10 @@ class Blockchain:
             - all transactions signatures verify
             - non-genesis blocks satisfy proof-of-work
             - block timestamps are monotonically increasing
+            - block timestamps are not unreasonably far in the future (VULN-13)
         :return: success/failure
         """
+        now = time.time()
         prev_timestamp: float | None = None
         for i, blk in enumerate(self.chain):
             # 1. check block hash
@@ -1004,6 +1037,9 @@ class Blockchain:
                 return False
             # 5. timestamps must be monotonically non-decreasing
             if prev_timestamp is not None and blk.timestamp < prev_timestamp:
+                return False
+            # 6. block timestamp must not be too far in the future (VULN-13)
+            if blk.timestamp > now + MAX_FUTURE_TIMESTAMP_SECS:
                 return False
             prev_timestamp = blk.timestamp
 
@@ -1023,6 +1059,7 @@ class Blockchain:
         hash/linkage/signatures/pow/timestamps don't check out.
         :return:
         """
+        now = time.time()
         prev_timestamp: float | None = None
         for i, blk in enumerate(self.chain):
             if not blk.hash_ok():
@@ -1034,6 +1071,9 @@ class Blockchain:
             if i > 0 and not blk.pow_ok(self.difficulty):
                 return i
             if prev_timestamp is not None and blk.timestamp < prev_timestamp:
+                return i
+            # Reject blocks timestamped too far in the future (VULN-13)
+            if blk.timestamp > now + MAX_FUTURE_TIMESTAMP_SECS:
                 return i
             prev_timestamp = blk.timestamp
 
@@ -1047,7 +1087,7 @@ class Blockchain:
         :return: True if repair was needed, otherwise False
         """
         bad_idx = self.find_bad_block()
-        if not bad_idx:  # chain is in good standing
+        if bad_idx is None:  # chain is in good standing (VULN-6: 0 is a valid bad index)
             return False
 
         # drop the bad block and everything after it.
