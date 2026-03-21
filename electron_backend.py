@@ -47,7 +47,7 @@ _pub_key = _priv_key.public_key()
 _node_pubkey_hex = serialize_pubkey(_pub_key)
 
 # ── Blockchain state ───────────────────────────────────────────────────────────
-chain: Blockchain = Blockchain.init(CHAIN_PATH, difficulty=2) or Blockchain(difficulty=2)
+chain: Blockchain = Blockchain.init(CHAIN_PATH, difficulty=4) or Blockchain(difficulty=4)
 
 # ── P2P network ───────────────────────────────────────────────────────────────
 _p2p_port = int(sys.argv[1]) if len(sys.argv) > 1 else 6000
